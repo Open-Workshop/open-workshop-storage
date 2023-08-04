@@ -3,6 +3,14 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+backend/sql/
+.idea/
+telegram_bot/key.json
+backend/steam_client/
+backend/steamapps/workshop/
+backend/database.db
+backend/gunicorn_config.py
+
 # C extensions
 *.so
 
