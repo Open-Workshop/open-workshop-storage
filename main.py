@@ -597,17 +597,20 @@ async def game_info(game_id: int, short_description: bool = False, description: 
     output = {"pre_result": query.first()}
     session.close()
 
-    output["result"] = {"name": output["pre_result"].name, "type": output["pre_result"].type,
-                        "logo": output["pre_result"].logo, "source": output["pre_result"].source}
-    if description:
-        output["result"]["description"] = output["pre_result"].description
-    if short_description:
-        output["result"]["short_description"] = output["pre_result"].short_description
-    if dates:
-        output["result"]["creation_date"] = output["pre_result"].creation_date
-    if statistics:
-        output["result"]["mods_count"] = output["pre_result"].mods_count
-        output["result"]["mods_downloads"] = output["pre_result"].mods_downloads
+    if output["pre_result"]:
+        output["result"] = {"name": output["pre_result"].name, "type": output["pre_result"].type,
+                            "logo": output["pre_result"].logo, "source": output["pre_result"].source}
+        if description:
+            output["result"]["description"] = output["pre_result"].description
+        if short_description:
+            output["result"]["short_description"] = output["pre_result"].short_description
+        if dates:
+            output["result"]["creation_date"] = output["pre_result"].creation_date
+        if statistics:
+            output["result"]["mods_count"] = output["pre_result"].mods_count
+            output["result"]["mods_downloads"] = output["pre_result"].mods_downloads
+    else:
+        output["result"] = None
     del output["pre_result"]
 
     return output
@@ -657,14 +660,17 @@ async def mod_info(mod_id: int, dependencies: bool = False, description: bool = 
     #Закрытие сессии
     session.close()
 
-    output["result"] = {"name": output["pre_result"].name, "size": output["pre_result"].size,
-                        "condition": output["pre_result"].condition, "source": output["pre_result"].source,
-                        "downloads": output["pre_result"].downloads}
-    if description:
-        output["result"]["description"] = output["pre_result"].description
-    if dates:
-        output["result"]["date_update"] = output["pre_result"].date_update
-        output["result"]["date_creation"] = output["pre_result"].date_creation
+    if output["pre_result"]:
+        output["result"] = {"name": output["pre_result"].name, "size": output["pre_result"].size,
+                            "condition": output["pre_result"].condition, "source": output["pre_result"].source,
+                            "downloads": output["pre_result"].downloads}
+        if description:
+            output["result"]["description"] = output["pre_result"].description
+        if dates:
+            output["result"]["date_update"] = output["pre_result"].date_update
+            output["result"]["date_creation"] = output["pre_result"].date_creation
+    else:
+        output["result"] = None
     del output["pre_result"]
 
     return output
