@@ -492,18 +492,8 @@ pip3 install -r requirements.txt
 ```bash
 sudo snap install --classic certbot; sudo ln -s /snap/bin/certbot /usr/bin/certbot; sudo certbot certonly --standalone
 ```
-7. Создание файла с настройками для сервера:
-Создайте файл в каталоге `backend` со следующим содержимым:
-```py
-bind = "0.0.0.0:443"  # Указывает Gunicorn слушать все IP-адреса на порту 443
-
-#По идее должен содержать значение:
-certfile = "/etc/letsencrypt/live/YOU_DOMEN.com/fullchain.pem"  # Путь к вашему HTTPS сертификату (фактический путь см в логах certbot)
-#По идее должен содержать значение:
-keyfile = "/etc/letsencrypt/live/YOU_DOMEN.com/privkey.pem"  # Путь к вашему приватному ключу (фактический путь см в логах certbot)
-
-workers = 1  # Количество рабочих процессов Gunicorn
-```
+7. Файл настроек Gunicorn:
+Переименовываем файл `gunicorn_config_sample.py` в `gunicorn_config.py` и заполняем поля `certfile` и `keyfile`.
 8. Запуск *(должны находится в каталоге `backend`)*:
 ```bash
 screen -S pytorrent_backend ./start.sh
