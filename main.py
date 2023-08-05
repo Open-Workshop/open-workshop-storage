@@ -7,7 +7,7 @@ import steam_tools as stt
 import sql_data_client as sdc
 import sql_statistics_client as stc
 from fastapi import FastAPI, Request
-from sqlalchemy import delete, insert, func
+from sqlalchemy import delete, insert, func, asc
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql.expression import desc
 from datetime import datetime, date, timedelta
@@ -774,7 +774,7 @@ async def statistics_hour(select_date: date = None, start_hour:int = 0, end_hour
     Session = sessionmaker(bind=stc.engine)
     session = Session()
 
-    query = session.query(stc.StatisticsHour.date_time, stc.StatisticsHour.count, stc.StatisticsHour.type)
+    query = session.query(stc.StatisticsHour.date_time, stc.StatisticsHour.count, stc.StatisticsHour.type).order_by(asc(stc.StatisticsHour.date_time))
     query = query.filter(stc.StatisticsHour.date_time >= start_date, stc.StatisticsHour.date_time <= end_date)
 
     output = []
@@ -810,7 +810,7 @@ async def statistics_day(start_date: date = None, end_date: date = None):
     Session = sessionmaker(bind=stc.engine)
     session = Session()
 
-    query = session.query(stc.StatisticsDay.date, stc.StatisticsDay.count, stc.StatisticsDay.type)
+    query = session.query(stc.StatisticsDay.date, stc.StatisticsDay.count, stc.StatisticsDay.type).order_by(asc(stc.StatisticsDay.date))
     query = query.filter(stc.StatisticsDay.date >= start_date, stc.StatisticsDay.date <= end_date)
 
     output = []
