@@ -277,12 +277,15 @@ async def download(mod_id: int):
 
 @app.get("/list/mods/")
 async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", tags = [],
-                   games = [], dependencies: bool = False, primary_sources = [], name: str = ""):
+                   games = [], dependencies: bool = False, primary_sources = [], name: str = "",
+                   description: bool = False, dates: bool = False):
     """
     Возвращает список модов к конкретной игре, которые есть на сервере.
 
     1. "page_size" - размер 1 страницы. Диапазон - 1...50 элементов.
     2. "page" - номер странице. Не должна быть отрицательной.
+    3. "description" - отправлять ли полное описание мода в ответе. По умолчанию `False`.
+    4. "dates" - отправлять ли дату последнего обновления и дату создания в ответе. По умолчанию `False`.
 
     О сортировке:
     Префикс `i` указывает что сортировка должна быть инвертированной.
@@ -319,7 +322,13 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     Session = sessionmaker(bind=sdc.engine)
     session = Session()
     # Выполнение запроса
-    query = session.query(sdc.Mod).order_by(tool.sort_mods(sort))
+    query = session.query(sdc.Mod.id, sdc.Mod.name, sdc.Mod.size, sdc.Mod.condition, sdc.Mod.source, sdc.Mod.downloads)
+    if description:
+        query = query.add_columns(sdc.Mod.description)
+    if dates:
+        query = query.add_columns(sdc.Mod.date_update, sdc.Mod.date_creation)
+
+    query = query.order_by(tool.sort_mods(sort))
 
     # Фильтрация по тегам
     if len(tags) > 0:
@@ -350,17 +359,34 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
 
     session.close()
 
+    output_mods = []
+    for mod in mods:
+        out = {"id": mod.id, "name": mod.name, "size": mod.size, "condition": mod.condition, "source": mod.source,
+               "downloads": mod.downloads}
+        if description:
+            out["description"] = mod.description
+        if dates:
+            out["date_update"] = mod.date_update
+            out["date_creation"] = mod.date_creation
+        output_mods.append(out)
+
     # Вывод результатов
-    return {"database_size": mods_count, "offset": offset, "results": mods}
+    return {"database_size": mods_count, "offset": offset, "results": output_mods}
 
 @app.get("/list/games/")
 async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNLOADS", name: str = "",
-                     type_app = [], genres = [], primary_sources = []):
+                     type_app = [], genres = [], primary_sources = [],
+                     short_description: bool = False, description: bool = False, dates: bool = False,
+                     statistics: bool = False):
     """
     Возвращает список игр, моды к которым есть на сервере.
 
     1. "page_size" - размер 1 страницы. Диапазон - 1...50 элементов.
     2. "page" - номер странице. Не должна быть отрицательной.
+    3. "short_description" - отправлять ли короткое описание. По умолчанию `False`.
+    4. "description" - отправлять ли описание. По умолчанию `False`.
+    5. "dates" - отправлять ли даты. По умолчанию `False`.
+    6. "statistics" - отправлять ли статистику. По умолчанию `False`.
 
     О сортировке:
     Префикс `i` указывает что сортировка должна быть инвертированной.
@@ -392,7 +418,17 @@ async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNL
     Session = sessionmaker(bind=sdc.engine)
     session = Session()
     # Выполнение запроса
-    query = session.query(sdc.Game).order_by(tool.sort_games(sort))
+    query = session.query(sdc.Game.id, sdc.Game.name, sdc.Game.type, sdc.Game.logo, sdc.Game.source)
+    if description:
+        query = query.add_column(sdc.Game.description)
+    if short_description:
+        query = query.add_column(sdc.Game.short_description)
+    if dates:
+        query = query.add_column(sdc.Game.creation_date)
+    if statistics:
+        query = query.add_columns(sdc.Game.mods_count, sdc.Game.mods_downloads)
+
+    query = query.order_by(tool.sort_games(sort))
 
     # Фильтрация по жанрам
     if len(genres) > 0:
@@ -416,10 +452,24 @@ async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNL
 
     mods_count = query.count()
     offset = page_size*page
-    mods = query.offset(offset).limit(page_size).all()
+    games = query.offset(offset).limit(page_size).all()
+
+    output_games = []
+    for game in games:
+        out = {"id": game.id, "name": game.name, "type": game.type, "logo": game.logo, "source": game.source}
+        if description:
+            out["description"] = game.description
+        if short_description:
+            out["short_description"] = game.short_description
+        if dates:
+            out["creation_date"] = game.creation_date
+        if statistics:
+            out["mods_count"] = game.mods_count
+            out["mods_downloads"] = game.mods_downloads
+        output_games.append(out)
 
     session.close()
-    return {"database_size": mods_count, "offset": offset, "results": mods}
+    return {"database_size": mods_count, "offset": offset, "results": output_games}
 
 
 @app.get("/list/tags/{game_id}")
@@ -516,31 +566,62 @@ async def list_resources_mods(mod_id: int, page_size: int = 10, page: int = 0, t
 
 
 @app.get("/info/game/{game_id}")
-async def game_info(game_id: int):
+async def game_info(game_id: int, short_description: bool = False, description: bool = False, dates: bool = False,
+                    statistics: bool = False):
     """
     Возвращает информацию об конкретном моде, а так же его состояние на сервере.
+
+    1. `short_description` - отправлять ли короткое описание. По умолчанию `False`.
+    2. `description` - отправлять ли описание. По умолчанию `False`.
+    3. `dates` - отправлять ли даты. По умолчанию `False`.
+    4. `statistics` - отправлять ли статистику. По умолчанию `False`.
     """
     stc.update("/info/game/")
 
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
     session = Session()
+
     # Выполнение запроса
-    query = session.query(sdc.Game)
+    query = session.query(sdc.Game.name, sdc.Game.type, sdc.Game.logo, sdc.Game.source)
+    if description:
+        query = query.add_column(sdc.Game.description)
+    if short_description:
+        query = query.add_column(sdc.Game.short_description)
+    if dates:
+        query = query.add_column(sdc.Game.creation_date)
+    if statistics:
+        query = query.add_columns(sdc.Game.mods_count, sdc.Game.mods_downloads)
+
     query = query.filter(sdc.Game.id == game_id)
-    query = query.first()
+    output = {"pre_result": query.first()}
     session.close()
 
-    return {"result": query}
+    output["result"] = {"name": output["pre_result"].name, "type": output["pre_result"].type,
+                        "logo": output["pre_result"].logo, "source": output["pre_result"].source}
+    if description:
+        output["result"]["description"] = output["pre_result"].description
+    if short_description:
+        output["result"]["short_description"] = output["pre_result"].short_description
+    if dates:
+        output["result"]["creation_date"] = output["pre_result"].creation_date
+    if statistics:
+        output["result"]["mods_count"] = output["pre_result"].mods_count
+        output["result"]["mods_downloads"] = output["pre_result"].mods_downloads
+    del output["pre_result"]
+
+    return output
 
 
 @app.get("/info/mod/{mod_id}")
-async def mod_info(mod_id: int, dependencies: bool = False):
+async def mod_info(mod_id: int, dependencies: bool = False, description: bool = False, dates: bool = False):
     """
     Возвращает информацию о конкретной игре.
 
-    1. mod_id - id мода.
-    2. dependencies - передать ли список ID модов от которых зависит этот мод. (ограничено 20 элементами)
+    1. `mod_id` - id мода.
+    2. `dependencies` - передать ли список ID модов от которых зависит этот мод. (ограничено 20 элементами)
+    3. `description` - отправлять ли полное описание мода в ответе. По умолчанию `False`.
+    4. `dates` - отправлять ли дату последнего обновления и дату создания в ответе. По умолчанию `False`.
 
     Я не верю что в зависимостях мода будет более 20 элементов, поэтому такое ограничение.
     Но если все-таки такой мод будет, то без ограничения мой сервер может лечь от нагрузки.
@@ -554,9 +635,15 @@ async def mod_info(mod_id: int, dependencies: bool = False):
     session = Session()
 
     # Выполнение запроса
-    query = session.query(sdc.Mod)
+    query = session.query(sdc.Mod.name, sdc.Mod.size, sdc.Mod.condition, sdc.Mod.source, sdc.Mod.downloads)
+    if description:
+        query = query.add_columns(sdc.Mod.description)
+    if dates:
+        query = query.add_columns(sdc.Mod.date_update, sdc.Mod.date_creation)
+
+
     query = query.filter(sdc.Mod.id == mod_id)
-    output["result"] = query.first()
+    output["pre_result"] = query.first()
 
     if dependencies:
         query = session.query(sdc.mods_dependencies.c.dependence)
@@ -569,6 +656,16 @@ async def mod_info(mod_id: int, dependencies: bool = False):
 
     #Закрытие сессии
     session.close()
+
+    output["result"] = {"name": output["pre_result"].name, "size": output["pre_result"].size,
+                        "condition": output["pre_result"].condition, "source": output["pre_result"].source,
+                        "downloads": output["pre_result"].downloads}
+    if description:
+        output["result"]["description"] = output["pre_result"].description
+    if dates:
+        output["result"]["date_update"] = output["pre_result"].date_update
+        output["result"]["date_creation"] = output["pre_result"].date_creation
+    del output["pre_result"]
 
     return output
 

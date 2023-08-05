@@ -35,7 +35,7 @@ type_map = {
 cache = {}
 
 def cache_types_data(code: str):
-    if cache.get(code):
+    if cache.get(code, None) is not None:
         return cache.get(code)
     else:
         output = {}
