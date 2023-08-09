@@ -33,6 +33,11 @@ app = FastAPI(
 )
 threads: dict = {}
 
+
+@app.on_event("startup")
+async def startup_event():
+    app.state.max_concurrency = 50  # Increasing the maximum concurrency limit
+
 @app.middleware("http")
 async def modify_header(request: Request, call_next):
     response = await call_next(request)
