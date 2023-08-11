@@ -21,10 +21,10 @@ path = 'steamapps/workshop/content/'
 # Создание подключения к базе данных
 steam = SteamCMD("steam_client")
 app = FastAPI(
-    title="PyTorrent API",
+    title="Open Workshop",
     contact={
         "name": "GitHub",
-        "url": "https://github.com/Miskler/pytorrent"
+        "url": "https://github.com/Open-Workshop"
     },
     license_info={
         "name": "MPL-2.0 license",
@@ -36,7 +36,7 @@ threads: dict = {}
 
 @app.on_event("startup")
 async def startup_event():
-    app.state.max_concurrency = 50  # Increasing the maximum concurrency limit
+    app.state.max_concurrency = 50  # GPT сказал что это на что-то влияет :D
 
 @app.middleware("http")
 async def modify_header(request: Request, call_next):
