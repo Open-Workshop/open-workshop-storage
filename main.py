@@ -814,7 +814,7 @@ async def statistics_day(start_date: date = None, end_date: date = None):
     if end_date is None:
         end_date = date.today()
     if start_date is None:
-        start_date = end_date-timedelta(days=7)
+        start_date = end_date-timedelta(days=6) #Т.к. у нас включительно, то именно 6 должно быть чтоб выходило 7
     if start_date > end_date:
         return JSONResponse(status_code=409, content={"message": "conflicting request", "error_id": 3})
 
