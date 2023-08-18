@@ -315,7 +315,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
                    games = [], dependencies: bool = False, primary_sources = [], name: str = "",
                    short_description: bool = False, description: bool = False, dates: bool = False):
     """
-    Возвращает список модов к конкретной игре, которые есть на сервере.
+    Возвращает список модов к конкретной игре, которые есть на сервере. Не до конца провалидированные моды в список не попадают.
 
     1. `page_size` - размер 1 страницы. Диапазон - 1...50 элементов.
     2. `page` - номер странице. Не должна быть отрицательной.
@@ -358,7 +358,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     Session = sessionmaker(bind=sdc.engine)
     session = Session()
     # Выполнение запроса
-    query = session.query(sdc.Mod.id, sdc.Mod.name, sdc.Mod.size, sdc.Mod.condition, sdc.Mod.source, sdc.Mod.downloads)
+    query = session.query(sdc.Mod.id, sdc.Mod.name, sdc.Mod.size, sdc.Mod.source, sdc.Mod.downloads)
     if description:
         query = query.add_columns(sdc.Mod.description)
     if short_description:
@@ -367,6 +367,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
         query = query.add_columns(sdc.Mod.date_update, sdc.Mod.date_creation)
 
     query = query.order_by(tool.sort_mods(sort))
+    query = query.filter(sdc.Mod.condition == 0)
 
     # Фильтрация по тегам
     if len(tags) > 0:
@@ -399,8 +400,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
 
     output_mods = []
     for mod in mods:
-        out = {"id": mod.id, "name": mod.name, "size": mod.size, "condition": mod.condition, "source": mod.source,
-               "downloads": mod.downloads}
+        out = {"id": mod.id, "name": mod.name, "size": mod.size, "source": mod.source, "downloads": mod.downloads}
         if description:
             out["description"] = mod.description
         if short_description:
