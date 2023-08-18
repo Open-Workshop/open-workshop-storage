@@ -222,7 +222,12 @@ def mod_dowload(mod_data:dict, wait_time):
 
 
     print(f"Поставлена задача на загрузку: {mod_data['consumer_app_id']}/{mod_data['publishedfileid']}", flush=True)
-    steam.workshop_update(app_id=mod_data['consumer_app_id'], workshop_id=mod_data['publishedfileid'], install_dir=WORKSHOP_DIR)
+
+    wait_steam = threading.Thread(target=steam.workshop_update, args=(mod_data['consumer_app_id'], mod_data['publishedfileid'], WORKSHOP_DIR,), name=f"{mod_data['publishedfileid']}/steam_wait")
+    wait_steam.start()
+    # Ждем максимум 1 минуту
+    wait_steam.join(timeout=60)
+
 
     ok = tool.zipping(game_id=mod_data['consumer_app_id'], mod_id=mod_data['publishedfileid'], target_size=mod_data['file_size'])
 
