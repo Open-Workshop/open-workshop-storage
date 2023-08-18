@@ -23,7 +23,6 @@ WORKSHOP_DIR = os.path.join(os.getcwd())
 path = 'steamapps/workshop/content/'
 
 # Создание подключения к базе данных
-steam = SteamCMD("steam_client")
 app = FastAPI(
     title="Open Workshop",
     contact={
@@ -212,6 +211,7 @@ async def mod_dowloader_request(mod_id: int):
 
 
 def mod_dowload(mod_data:dict, wait_time):
+    steam = SteamCMD("steam_client")
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
     # Выполнение запроса
@@ -949,7 +949,7 @@ async def statistics_type_map(request: Request):
 
 
 def init():
-    global steam
+    steam = SteamCMD("steam_client")
     try:
         steam.install(force=True)
         print("Установка клиента Steam завершена")
