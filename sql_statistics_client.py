@@ -10,6 +10,7 @@ allow_language_type_map = {"ru": "Нет перевода 0_о"}
 type_map = {
     "start": {"ru": "Запусков сервера"},
     "/statistics/info/type_map/": {"ru": "Запросов к карте переводов"},
+    "/info/queue/size": {"ru": "Запросов к размеру очереди"},
     "/statistics/info/all/": {"ru": "Запросов к общей статистической сводке"},
     "/statistics/day/": {"ru": "Запросов к ежедневной статистике"},
     "/statistics/hour/": {"ru": "Запросов к ежечасовой статистике"},

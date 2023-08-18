@@ -7,8 +7,9 @@ from pathlib import Path
 from datetime import datetime
 from sqlalchemy.sql.expression import desc
 
-def zipping(game_id: int, mod_id: int) -> bool:
-    # Запаковываем сохраненный мод в архив (для экономии места и трафика)
+
+def zipping(game_id: int, mod_id: int, target_size: int) -> bool: \
+        # Запаковываем сохраненный мод в архив (для экономии места и трафика)
     directory_path = f"steamapps/workshop/content/{game_id}/{mod_id}"  # Укажите путь к вашей папке
     zip_path = f"steamapps/workshop/content/{game_id}/{mod_id}.zip"  # Укажите путь к ZIP-архиву, который вы хотите создать
 
@@ -17,14 +18,32 @@ def zipping(game_id: int, mod_id: int) -> bool:
             shutil.rmtree(directory_path)
         return False
 
+    total_size = 0
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_BZIP2) as zipf:
-        for root, _, files in os.walk(directory_path):
+        for root, dirs, files in os.walk(directory_path):
             for file in files:
                 file_path = os.path.join(root, file)
                 zipf.write(file_path, os.path.relpath(file_path, directory_path))
+                # пропускаем символические ссылки
+                if not os.path.islink(file_path):
+                    total_size += os.path.getsize(file_path)
+            for dir in dirs:
+                dir_path = os.path.join(root, dir)
+                zipf.write(dir_path, os.path.relpath(dir_path, directory_path))
+
     # Удаление исходной папки и её содержимого
     shutil.rmtree(directory_path)
-    return True
+
+    print(f"t target {target_size}")
+    print(f"t total {total_size}")
+
+    # Проверяем полностью ли установился мод
+    if total_size != target_size:
+        os.remove(zip_path)
+        return False
+    else:
+        return True
+
 
 def sort_mods(sort_by: str):
     match sort_by:
@@ -56,6 +75,7 @@ def sort_mods(sort_by: str):
             return desc(sdc.Mod.downloads)
         case _:
             return sdc.Mod.downloads  # По умолчанию сортируем по загрузкам
+
 
 def sort_games(sort_by: str):
     match sort_by:
@@ -89,7 +109,7 @@ def downloads_count_update(session, mod):
     # Может работать не сильно наглядно из-за кеширования браузера.
     # Т.е. несколько запросов подряд не увеличит кол-во загрузок!
     session.query(sdc.Mod).filter_by(id=int(mod.id)).update(
-        {'downloads': mod.downloads+1, 'date_request': datetime.now()})
+        {'downloads': mod.downloads + 1, 'date_request': datetime.now()})
 
     # Проходит по всем связанным играм и устанавливает количество скачиваний +1
     for game in mod.associated_games:
@@ -97,15 +117,26 @@ def downloads_count_update(session, mod):
 
     session.commit()
 
-def get_mods_count(session, game_id:int):
+
+def get_mods_count(session, game_id: int):
     query = session.query(sdc.games_mods)
     query = query.filter(sdc.games_mods.c.game_id == int(game_id))
     return query.count()
 
-def str_to_list(string:str):
+
+def str_to_list(string: str):
     try:
         string = json.loads(string)
         if type(string) is not list:
             string = []
-    except: string = []
+    except:
+        string = []
     return string
+
+
+# Ограничивает текст до указанного количества символов
+def truncate_text(text: str, length: int = 256) -> str:
+    if len(text) > length:
+        text = text[:length-3] + "..."
+    return text
+

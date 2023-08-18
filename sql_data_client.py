@@ -62,6 +62,7 @@ class Mod(base): # Таблица "моды"
     id = Column(Integer, primary_key=True)
     name = Column(String)
 
+    short_description = Column(String)
     description = Column(String)
 
     size = Column(Integer)

@@ -1,4 +1,5 @@
 import os
+import time
 import tool
 import shutil
 import threading
@@ -13,6 +14,9 @@ from sqlalchemy.sql.expression import desc
 from datetime import datetime, date, timedelta
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
 from starlette.responses import JSONResponse, FileResponse, RedirectResponse
+
+
+#TODO обновить документацию
 
 
 WORKSHOP_DIR = os.path.join(os.getcwd())
@@ -32,6 +36,26 @@ app = FastAPI(
     },
 )
 threads: dict = {}
+# Количество системных веток (т.е. не тех кто грузит мод)
+sis_threads_count = 2
+# Разрешенное количество параллельных загрузок со Steam
+parallel = 2
+
+todo_download = {}
+
+def todo_exe():
+    global todo_download, threads, sis_threads_count, parallel
+
+    print(f"{len(threads)} {sis_threads_count}, {len(todo_download)}", flush=True)
+    if len(todo_download) > 0 and len(threads) <= sis_threads_count+parallel:
+        tod = todo_download[list(todo_download.keys())[0]]
+        name = f"{tod[0]['consumer_app_id']}/{tod[0]['publishedfileid']}"
+        threads[name] = threading.Thread(target=mod_dowload, args=(tod[0], datetime.now(),), name=name)
+        threads[name].start()
+        del todo_download[list(todo_download.keys())[0]]
+
+    time.sleep(1)
+    todo_exe()
 
 
 @app.on_event("startup")
@@ -61,6 +85,7 @@ async def mod_dowloader_request(mod_id: int):
     Нужно передать `ID` мода **Steam**.
     Если у сервера уже есть этот мод - он его отправит как `ZIP` архив со сжатием `ZIP_BZIP2`.
     Если у сервера нет этого мода он отправит `JSON` с информацией о постановке мода на скачивание.
+    Мод добавляется в TO-DO список задач и будет загруен как только придет его очередь.
     """
     stc.update('/download/steam/')
 
@@ -90,7 +115,7 @@ async def mod_dowloader_request(mod_id: int):
         stc.create_processing(type="download_steam_error", time_start=wait_time)
         stc.update("mod_not_found_local")
         return JSONResponse(status_code=404, content={"message": "this mod was not found", "error_id": 2})
-    elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) == True: # Проверяем, загружаем ли этот ресурс прямо сейчас
+    elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) == True or todo_download.get(mod_id, None) != None: # Проверяем, загружаем ли этот ресурс прямо сейчас
         stc.create_processing(type="download_steam_error", time_start=wait_time)
         return JSONResponse(status_code=102, content={"message": "your request is already being processed", "error_id": 3})
 
@@ -120,7 +145,7 @@ async def mod_dowloader_request(mod_id: int):
             print(db_datetime, mod_update)
             if db_datetime >= mod_update: # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
                 # Пытаемся фиксануть проблему
-                tool.zipping(game_id=rows[0].id, mod_id=mod_id)
+                tool.zipping(game_id=rows[0].id, mod_id=mod_id, target_size=rows[0].size)
                 # Шлем пользователю
                 tool.downloads_count_update(session=session, mod=rows[0])
                 stc.create_processing(type="download_steam_ok", time_start=wait_time)
@@ -159,26 +184,17 @@ async def mod_dowloader_request(mod_id: int):
         stc.create_processing(type="download_steam_error", time_start=wait_time)
         return JSONResponse(status_code=103, content={"message": "the server is not ready to process requests", "error_id": 1})
 
-    #Ставим задачу загрузить мод
-    threads[f"{mod['consumer_app_id']}/{str(mod_id)}"] = True
 
-    threading.Thread(target=mod_dowload, args=(mod, wait_time, updating,), name=f"{str(mod['consumer_app_id'])}/{str(mod_id)}").start()
-    #Оповещаем пользователя, что его запрос принят в обработку
-    return JSONResponse(status_code=202, content={"message": "request added to queue", "error_id": 0, "updating": updating})
-def mod_dowload(mod_data:dict, wait_time, update: bool = False):
-    # Создание сессии
-    Session = sessionmaker(bind=sdc.engine)
-    # Выполнение запроса
-    session = Session()
-    if not update:
+    if not updating:
         insert_statement = insert(sdc.Mod).values(
-            id=mod_data['publishedfileid'],
-            name=mod_data['title'],
-            description=mod_data['description'],
-            size=mod_data['file_size'],
-            condition=2,
-            date_creation=datetime.fromtimestamp(mod_data['time_created']),
-            date_update=datetime.fromtimestamp(mod_data['time_updated']),
+            id=mod['publishedfileid'],
+            name=mod['title'],
+            short_description=tool.truncate_text(text=mod['description']),
+            description=mod['description'],
+            size=mod['file_size'],
+            condition=3,
+            date_creation=datetime.fromtimestamp(mod['time_created']),
+            date_update=datetime.fromtimestamp(mod['time_updated']),
             date_request=datetime.now(),
             source="steam",
             downloads=0
@@ -186,17 +202,32 @@ def mod_dowload(mod_data:dict, wait_time, update: bool = False):
         # Выполнение операции INSERT
         session.execute(insert_statement)
     else:
-        session.query(sdc.Mod).filter_by(id=int(mod_data['publishedfileid'])).update(
-            {'condition': 2, "date_update": datetime.fromtimestamp(mod_data['time_updated'])})
+        session.query(sdc.Mod).filter_by(id=int(mod['publishedfileid'])).update({'condition': 3, "date_update": datetime.fromtimestamp(mod['time_updated'])})
+    session.commit()
+
+    todo_download[mod_id] = [mod, wait_time, updating]
+
+    session.close()
+    #Оповещаем пользователя, что его запрос принят в обработку
+    return JSONResponse(status_code=202, content={"message": "request added to queue", "error_id": 0, "updating": updating})
+
+
+def mod_dowload(mod_data:dict, wait_time):
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    # Выполнение запроса
+    session = Session()
+    session.query(sdc.Mod).filter_by(id=int(mod_data['publishedfileid'])).update(
+        {'condition': 2, "date_update": datetime.fromtimestamp(mod_data['time_updated'])})
     session.commit()
 
 
-    print(f"Поставлена задача на загрузку: {mod_data['consumer_app_id']}/{mod_data['publishedfileid']}")
+    print(f"Поставлена задача на загрузку: {mod_data['consumer_app_id']}/{mod_data['publishedfileid']}", flush=True)
     steam.workshop_update(app_id=mod_data['consumer_app_id'], workshop_id=mod_data['publishedfileid'], install_dir=WORKSHOP_DIR)
 
-    ok = tool.zipping(game_id=mod_data['consumer_app_id'], mod_id=mod_data['publishedfileid'])
+    ok = tool.zipping(game_id=mod_data['consumer_app_id'], mod_id=mod_data['publishedfileid'], target_size=mod_data['file_size'])
 
-    print(f"Загрузка завершена: {mod_data['consumer_app_id']}/{mod_data['publishedfileid']}")
+    print(f"Загрузка завершена: {mod_data['consumer_app_id']}/{mod_data['publishedfileid']}", flush=True)
 
     if ok: #Если загрузка прошла успешно
         stc.update("download_from_steam_ok")
@@ -283,14 +314,15 @@ async def download(mod_id: int):
 @app.get("/list/mods/")
 async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", tags = [],
                    games = [], dependencies: bool = False, primary_sources = [], name: str = "",
-                   description: bool = False, dates: bool = False):
+                   short_description: bool = False, description: bool = False, dates: bool = False):
     """
     Возвращает список модов к конкретной игре, которые есть на сервере.
 
-    1. "page_size" - размер 1 страницы. Диапазон - 1...50 элементов.
-    2. "page" - номер странице. Не должна быть отрицательной.
-    3. "description" - отправлять ли полное описание мода в ответе. По умолчанию `False`.
-    4. "dates" - отправлять ли дату последнего обновления и дату создания в ответе. По умолчанию `False`.
+    1. `page_size` - размер 1 страницы. Диапазон - 1...50 элементов.
+    2. `page` - номер странице. Не должна быть отрицательной.
+    3. `short_description` - отправлять ли короткое описание мода в ответе. В длину оно максимум 256 символов. По умолчанию `False`.
+    4. `description` - отправлять ли полное описание мода в ответе. По умолчанию `False`.
+    5. `dates` - отправлять ли дату последнего обновления и дату создания в ответе. По умолчанию `False`.
 
     О сортировке:
     Префикс `i` указывает что сортировка должна быть инвертированной.
@@ -330,6 +362,8 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     query = session.query(sdc.Mod.id, sdc.Mod.name, sdc.Mod.size, sdc.Mod.condition, sdc.Mod.source, sdc.Mod.downloads)
     if description:
         query = query.add_columns(sdc.Mod.description)
+    if short_description:
+        query = query.add_column(sdc.Mod.short_description)
     if dates:
         query = query.add_columns(sdc.Mod.date_update, sdc.Mod.date_creation)
 
@@ -370,6 +404,8 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
                "downloads": mod.downloads}
         if description:
             out["description"] = mod.description
+        if short_description:
+            out["short_description"] = mod.short_description
         if dates:
             out["date_update"] = mod.date_update
             out["date_creation"] = mod.date_creation
@@ -622,14 +658,15 @@ async def game_info(game_id: int, short_description: bool = False, description: 
 
 
 @app.get("/info/mod/{mod_id}")
-async def mod_info(mod_id: int, dependencies: bool = False, description: bool = False, dates: bool = False):
+async def mod_info(mod_id: int, dependencies: bool = False, short_description: bool = False, description: bool = False, dates: bool = False):
     """
     Возвращает информацию о конкретной игре.
 
     1. `mod_id` - id мода.
     2. `dependencies` - передать ли список ID модов от которых зависит этот мод. (ограничено 20 элементами)
-    3. `description` - отправлять ли полное описание мода в ответе. По умолчанию `False`.
-    4. `dates` - отправлять ли дату последнего обновления и дату создания в ответе. По умолчанию `False`.
+    3. `short_description` - отправлять ли короткое описание мода в ответе. В длину оно максимум 256 символов. По умолчанию `False`.
+    4. `description` - отправлять ли полное описание мода в ответе. По умолчанию `False`.
+    5. `dates` - отправлять ли дату последнего обновления и дату создания в ответе. По умолчанию `False`.
 
     Я не верю что в зависимостях мода будет более 20 элементов, поэтому такое ограничение.
     Но если все-таки такой мод будет, то без ограничения мой сервер может лечь от нагрузки.
@@ -646,6 +683,8 @@ async def mod_info(mod_id: int, dependencies: bool = False, description: bool = 
     query = session.query(sdc.Mod.name, sdc.Mod.size, sdc.Mod.condition, sdc.Mod.source, sdc.Mod.downloads)
     if description:
         query = query.add_columns(sdc.Mod.description)
+    if short_description:
+        query = query.add_column(sdc.Mod.short_description)
     if dates:
         query = query.add_columns(sdc.Mod.date_update, sdc.Mod.date_creation)
 
@@ -671,6 +710,8 @@ async def mod_info(mod_id: int, dependencies: bool = False, description: bool = 
                             "downloads": output["pre_result"].downloads}
         if description:
             output["result"]["description"] = output["pre_result"].description
+        if short_description:
+            output["result"]["short_description"] = output["pre_result"].short_description
         if dates:
             output["result"]["date_update"] = output["pre_result"].date_update
             output["result"]["date_creation"] = output["pre_result"].date_creation
@@ -679,6 +720,22 @@ async def mod_info(mod_id: int, dependencies: bool = False, description: bool = 
     del output["pre_result"]
 
     return output
+
+
+@app.get("/info/queue/size")
+async def queue_size():
+    """
+    Возвращает размер очереди *(int)*.
+    """
+    stc.update("/info/queue/size")
+
+    try:
+        size = round(len(todo_download) / parallel)
+    except:
+        size = 0
+
+    return size
+
 
 @app.get("/condition/mod/{ids_array}")
 async def condition_mods(ids_array):
@@ -932,4 +989,7 @@ if threads.get("start", None) == None:
         session.execute(delete_dep)
         session.commit()
     session.close()
+
+    threads["todo"] = threading.Thread(target=todo_exe, name="todo")
+    threads["todo"].start()
 

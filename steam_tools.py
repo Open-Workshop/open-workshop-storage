@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from sqlalchemy import delete, insert
 from fastapi.responses import FileResponse
+from user_agent import generate_user_agent
 
 headers = {
     "Content-type": "application/x-www-form-urlencoded",
@@ -32,38 +33,58 @@ def get_html_data(id:int):
     result = {"dependencies": [], "screenshots": []}
 
     try:
-        d = 'https://steamcommunity.com/sharedfiles/filedetails/?id='
-        response = requests.get(d+str(id), timeout=10)
+        d = 'https://steamcommunity.com/sharedfiles/filedetails/?id='+str(id)
+        agent = generate_user_agent(device_type="desktop")
+        print(agent)
+        response = requests.get(url=d, timeout=10, headers={"User-Agent": agent})
 
-        soup = BeautifulSoup(response.content, "html.parser")
+        try:
+            soup = BeautifulSoup(response.content, "html.parser")
 
-        # Используйте метод `find_all` для поиска всех элементов с классом "requiredItemsContainer" и id "RequiredItems"
-        containers = soup.find_all("div", class_="requiredItemsContainer", id="RequiredItems")
+            # Используйте метод `find_all` для поиска всех элементов с классом "requiredItemsContainer" и id "RequiredItems"
+            containers = soup.find_all("div", class_="requiredItemsContainer", id="RequiredItems")
 
-        # Для каждого контейнера найдите все ссылки внутри него
-        for container in containers:
-            links = container.find_all("a")
-            for link in links:
-                out = link.get("href").removeprefix("https://steamcommunity.com/workshop/filedetails/?id=")
-                if out.isdigit():
-                    result["dependencies"].append(int(out))
+            # Для каждого контейнера найдите все ссылки внутри него
+            for container in containers:
+                links = container.find_all("a")
+                for link in links:
+                    out = link.get("href").removeprefix("https://steamcommunity.com/workshop/filedetails/?id=")
+                    if out.isdigit():
+                        result["dependencies"].append(int(out))
+        except:
+            print(f"Ошибка! Не удалось получить информацию о зависимостях мода! ({id})")
 
+        try:
+            # Создаем объект Beautiful Soup для парсинга HTML-кода страницы
+            soup = BeautifulSoup(response.content, 'html.parser')
 
-        # Создаем объект Beautiful Soup для парсинга HTML-кода страницы
-        soup = BeautifulSoup(response.content, 'html.parser')
+            # Находим все элементы <a> с классом 'highlight_screenshot_link'
+            screenshot_links = soup.find_all('div', class_="screenshot_holder")#class_='highlight_player_item highlight_screenshot')
 
-        # Находим все элементы <a> с классом 'highlight_screenshot_link'
-        screenshot_links = soup.find_all('div', class_="screenshot_holder")#class_='highlight_player_item highlight_screenshot')
+            #Извлекаем ссылки на скриншоты
+            for div in screenshot_links:
+                lin = div.find('a')
+                print(lin)
 
-        # Извлекаем ссылки на скриншоты
-        for div in screenshot_links:
-            lin = div.find('a')['href']
-            start_index = lin.find("'")+1
-            lin = str(lin[start_index:lin.find("'", start_index)])
-            if lin.startswith("https://"):
-                result["screenshots"].append(lin)
+                # Извлекаем значение атрибута onclick
+                onclick_value = lin.get('onclick')
+
+                # Ищем начальную и конечную позиции ссылки внутри значения атрибута onclick
+                start_index = onclick_value.find("'") + 1
+                end_index = onclick_value.rfind("'")
+
+                # Извлекаем ссылку
+                image_url = onclick_value[start_index:end_index]
+
+                #lin = lin['href']
+                #start_index = lin.find("'")+1
+                #lin = str(lin[start_index:lin.find("'", start_index)])
+                if image_url.startswith("https://"):
+                    result["screenshots"].append(image_url)
+        except:
+            print(f"Ошибка! Не удалось получить скриншоты мода! ({id})")
     except:
-        print(f"Ошибка! Не удалось получить информацию о зависимостях мода! ({id})")
+        print(f"Ошибка! Глобальная ошибка при получении информации о моде! ({id})")
 
     return result
 
@@ -92,6 +113,8 @@ def checker(rows, path, mod_id, session):
         else:
             bind = "null"
 
+        print(bind)
+        print(mod_id)
         path_real = path + f'{bind}/{mod_id}'  # Получаем реальный путь до файла
         if os.path.isfile(path_real + '.zip'):  # Если это ZIP архив - отправляем
             return FileResponse(path=path_real+'.zip', filename=f"{rows[0].name}.zip")
@@ -214,7 +237,7 @@ def set_game(session, mod_data):
             session.commit()
 
             for genre in dat['genres']:
-                # Создаем тег
+                # Создаем жанр
                 result = session.query(sdc.Genres).filter_by(id=genre['id']).first()
                 if result is None:
                     insert_genre = insert(sdc.Genres).values(id=genre['id'], name=genre.get('description', 'No data'))
@@ -228,6 +251,7 @@ def set_game(session, mod_data):
                     insert_statement = insert(sdc.game_genres).values(game_id=mod_data["consumer_app_id"],
                                                                       genre_id=genre['id'])
                     session.execute(insert_statement)
+                    session.commit()
     else:
         session.query(sdc.Game).filter_by(id=int(mod_data['consumer_app_id'])).update({'mods_count': tool.get_mods_count(session=session, game_id=mod_data["consumer_app_id"])})
     session.commit()
