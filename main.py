@@ -46,7 +46,7 @@ todo_download = {}
 def todo_exe():
     global todo_download, threads, sis_threads_count, parallel
 
-    if len(todo_download) > 0 and len(threads) <= sis_threads_count+parallel:
+    if len(todo_download) > 0:# and len(threads) <= sis_threads_count+parallel:
         tod = todo_download[list(todo_download.keys())[0]]
         name = f"{tod[0]['consumer_app_id']}/{tod[0]['publishedfileid']}"
         threads[name] = threading.Thread(target=mod_dowload, args=(tod[0], datetime.now(),), name=name)
