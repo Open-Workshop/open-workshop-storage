@@ -53,7 +53,11 @@ def todo_exe():
         del todo_download[list(todo_download.keys())[0]]
 
     time.sleep(1)
-    todo_exe()
+
+    #Создаем новый туду процесс и даем этому умереть
+    #Самовызов это рекурсия который со временем переполнит стек
+    threads["todo"] = threading.Thread(target=todo_exe, name="todo")
+    threads["todo"].start()
 
 
 @app.on_event("startup")
