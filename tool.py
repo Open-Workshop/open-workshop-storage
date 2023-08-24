@@ -34,14 +34,17 @@ def zipping(game_id: int, mod_id: int, target_size: int) -> bool: \
     # Удаление исходной папки и её содержимого
     shutil.rmtree(directory_path)
 
-    print(f"t target {target_size}")
-    print(f"t total {total_size}")
+    print(f"mod size target {target_size}")
+    print(f"mod size total  {total_size}")
 
     # Проверяем полностью ли установился мод
     if total_size != target_size:
         os.remove(zip_path)
         return False
     else:
+        Path(f"mods/{game_id}").mkdir(parents=True, exist_ok=True)
+        os.replace(src=zip_path, dst=f"mods/{game_id}/{mod_id}.zip")
+
         return True
 
 

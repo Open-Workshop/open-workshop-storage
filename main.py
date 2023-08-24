@@ -20,7 +20,7 @@ from starlette.responses import JSONResponse, FileResponse, RedirectResponse
 
 
 WORKSHOP_DIR = os.path.join(os.getcwd())
-path = 'steamapps/workshop/content/'
+path = 'steam/steamapps/workshop/content/'
 
 # Создание подключения к базе данных
 app = FastAPI(
@@ -106,7 +106,7 @@ async def mod_dowloader_request(mod_id: int):
     mod = stt.get_mod(str(mod_id))
 
     if mod == None: # Проверяем, существует ли запрашиваемый мод на серверах Steam
-        output = stt.checker(rows=rows, path=path, mod_id=mod_id, session=session)
+        output = stt.checker(rows=rows, steam_path=path, mod_id=mod_id, session=session)
         if output is not None:
             tool.downloads_count_update(session=session, mod=rows)
 
@@ -122,10 +122,11 @@ async def mod_dowloader_request(mod_id: int):
         return JSONResponse(status_code=102, content={"message": "your request is already being processed", "error_id": 3})
 
     real_path = path + f'{str(mod["consumer_app_id"])}/{str(mod_id)}'
+    zip_path = f'mods/{str(mod["consumer_app_id"])}/{str(mod_id)}.zip'
 
     updating = False
-    if (rows != None and len(rows) > 0) or os.path.isfile(real_path+'.zip') or os.path.isdir(real_path): # Проверяем есть ли запись на сервере в каком-либо виде
-        if (rows != None and len(rows) > 0) and os.path.isfile(real_path+'.zip'):  # Если это ZIP архив - отправляем
+    if (rows != None and len(rows) > 0) or os.path.isfile(zip_path) or os.path.isdir(real_path): # Проверяем есть ли запись на сервере в каком-либо виде
+        if (rows != None and len(rows) > 0) and os.path.isfile(zip_path):  # Если это ZIP архив - отправляем
             mod_update = datetime.fromtimestamp(mod["time_updated"])
             db_datetime = rows[0].date_update
 
@@ -135,7 +136,7 @@ async def mod_dowloader_request(mod_id: int):
                 tool.downloads_count_update(session=session, mod=rows[0])
                 stc.create_processing(type="download_steam_ok", time_start=wait_time)
                 stc.update("files_sent")
-                return FileResponse(real_path+'.zip', filename=f"{rows[0].name}.zip")
+                return FileResponse(zip_path, filename=f"{rows[0].name}.zip")
             else:
                 stc.update("updating_mod")
                 updating = True
@@ -152,7 +153,7 @@ async def mod_dowloader_request(mod_id: int):
                 tool.downloads_count_update(session=session, mod=rows[0])
                 stc.create_processing(type="download_steam_ok", time_start=wait_time)
                 stc.update("files_sent")
-                return FileResponse(real_path+'.zip', filename=f"{rows[0].name}.zip")
+                return FileResponse(zip_path, filename=f"{rows[0].name}.zip")
             else:
                 stc.update("updating_mod")
                 updating = True
@@ -300,7 +301,7 @@ async def download(mod_id: int):
             session.close()
             return JSONResponse(status_code=102, content={"message": "this mod is still loading", "error_id": 3})
 
-        output = stt.checker(rows=rows, path=path, mod_id=mod_id, session=session)
+        output = stt.checker(rows=rows, steam_path=path, mod_id=mod_id, session=session)
         if output is not None:
             tool.downloads_count_update(session=session, mod=rows[0])
             stc.create_processing(type="download_local_ok", time_start=wait_time)
@@ -735,12 +736,14 @@ async def queue_size():
     """
     Возвращает размер очереди *(int)*.
     """
-    stc.update("/info/queue/size")
+    stc.update("/info/queue/size/")
 
     try:
-        size = round(len(todo_download) / parallel)
+        size = len(todo_download)
+        if size != 0:
+            size = round(size / parallel)
     except:
-        size = 0
+        size = -1
 
     return size
 
@@ -975,13 +978,9 @@ if threads.get("start", None) == None:
         try:
             path = f'steamapps/workshop/content/{mod.associated_games[0].id}/{mod.id}'
 
-            if os.path.isfile(path + '.zip'):
+            if os.path.isfile(f'mods/{mod.associated_games[0].id}/{mod.id}.zip'):
                 print(f'Обнаружен не провалидированный архив! ({mod.id})')
-                os.remove(path + '.zip')
-            if os.path.isdir(path):
-                print(f'Обнаружена не провалидированная папка! ({mod.id})')
-                # Удаление исходной папки и её содержимого
-                shutil.rmtree(path)
+                os.remove(f'mods/{mod.associated_games[0].id}/{mod.id}.zip')
         except:
             print(f"Ошибка удаления папки/архива битого мода с ID - {mod.id}")
 
@@ -997,6 +996,11 @@ if threads.get("start", None) == None:
         session.execute(delete_dep)
         session.commit()
     session.close()
+
+    # Удаляем всю папку т.к. там только поврежденные моды
+    if os.path.isdir("steamapps/workshop"):
+        shutil.rmtree("steamapps/workshop")
+        print("Папка модов Steam удалена")
 
     threads["todo"] = threading.Thread(target=todo_exe, name="todo")
     threads["todo"].start()
