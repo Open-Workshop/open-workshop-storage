@@ -320,7 +320,7 @@ async def download(mod_id: int):
 
 @app.get("/list/mods/")
 async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", tags = [],
-                   games = [], dependencies: bool = False, primary_sources = [], name: str = "",
+                   games = [], allowed_ids = [], dependencies: bool = False, primary_sources = [], name: str = "",
                    short_description: bool = False, description: bool = False, dates: bool = False):
     """
     Возвращает список модов к конкретной игре, которые есть на сервере. Не до конца провалидированные моды в список не попадают.
@@ -343,12 +343,13 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     7. DOWNLOADS *(по умолчанию)* - сортировка по количеству загрузок.
 
     О фильтрации:
-    1. "tags" - передать список тегов которые должен содержать мод *(по умолчанию пуст)* *(нужно передать ID тегов)*.
-    2. "games" - список игр к которым подходит мод.
+    1. `tags` - передать список тегов которые должен содержать мод *(по умолчанию пуст)* *(нужно передать ID тегов)*.
+    2. `games` - список игр к которым подходит мод.
     Сервер учитывает что мод может подходить для нескольких игр, но обычно мод подходит только для одной игры.
-    3. "dependencies" - отфильтровывает моды у которых есть зависимости на другие моды. *(булевка)*
-    4. "primary_sources" - список допустимых первоисточников.
-    5. "name" - поиск по имени. Например `name=Harmony` *(в отличии от передаваемых списков, тут скобки не нужны)*.
+    3. `allowed_ids` - если передан хотя бы один элемент, идет выдача конкретно этих модов.
+    4. `dependencies` - отфильтровывает моды у которых есть зависимости на другие моды. *(булевка)*
+    5. `primary_sources` - список допустимых первоисточников.
+    6. `name` - поиск по имени. Например `name=Harmony` *(в отличии от передаваемых списков, тут скобки не нужны)*.
     Работает как проверка есть ли у мода в названии определенная последовательности символов.
     """
     stc.update("/list/mods/")
@@ -356,10 +357,11 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     tags = tool.str_to_list(tags)
     games = tool.str_to_list(games)
     primary_sources = tool.str_to_list(primary_sources)
+    allowed_ids = tool.str_to_list(allowed_ids)
 
     if page_size > 50 or page_size < 1:
         return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
-    elif (len(tags)+len(games)+len(primary_sources)) > 30:
+    elif (len(tags)+len(games)+len(primary_sources)+len(allowed_ids)) > 30:
         return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 30 elements in sum", "error_id": 2})
 
     # Создание сессии
@@ -381,6 +383,10 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     if len(tags) > 0:
         for tag_id in tags:
             query = query.filter(sdc.Mod.tags.any(sdc.ModTag.id == tag_id))
+
+    # Фильтрация по конкретным ID
+    if len(allowed_ids) > 0:
+        query = query.filter(sdc.Mod.id.in_(allowed_ids))
 
     # Фильтрация по играм
     if len(games) > 0:
