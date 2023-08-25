@@ -115,9 +115,11 @@ async def mod_dowloader_request(mod_id: int):
         stc.create_processing(type="download_steam_error", time_start=wait_time)
         stc.update("mod_not_found_local")
         return JSONResponse(status_code=404, content={"message": "this mod was not found", "error_id": 2})
-    elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) == True or todo_download.get(mod_id, None) != None: # Проверяем, загружаем ли этот ресурс прямо сейчас
+    elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) == True or mod_id in todo_download.keys(): # Проверяем, загружаем ли этот ресурс прямо сейчас
         stc.create_processing(type="download_steam_error", time_start=wait_time)
         return JSONResponse(status_code=102, content={"message": "your request is already being processed", "error_id": 3})
+
+    print(f"{mod_id in todo_download.keys()}", flush=True)
 
     real_path = path + f'{str(mod["consumer_app_id"])}/{str(mod_id)}'
     zip_path = f'mods/{str(mod["consumer_app_id"])}/{str(mod_id)}.zip'
@@ -203,7 +205,7 @@ async def mod_dowloader_request(mod_id: int):
         # Выполнение операции INSERT
         session.execute(insert_statement)
     else:
-        session.query(sdc.Mod).filter_by(id=int(mod['publishedfileid'])).update({'condition': 3, "date_update": datetime.fromtimestamp(mod['time_updated'])})
+        session.query(sdc.Mod).filter_by(id=int(mod['publishedfileid'])).update({'condition': 3, "date_request": datetime.now(), "date_update": datetime.fromtimestamp(mod['time_updated'])})
     session.commit()
 
     todo_download[mod_id] = [mod, wait_time, updating]
@@ -317,6 +319,66 @@ async def download(mod_id: int):
     session.close()
     stc.update("mod_not_found_local")
     return JSONResponse(status_code=404, content={"message": "the mod is not on the server", "error_id": 1})
+
+@app.get("/update/steam/{mod_id}")
+async def mod_data_update(mod_id: int):
+    """
+    Нужно передать `ID` мода.
+
+    Делает проверку, есть ли в Steam обновления для этого мода.
+    """
+    stc.update("/update/steam/")
+
+    global threads
+    global path
+
+    wait_time = datetime.now()
+
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+
+    # Выполнение запроса
+    session = Session()
+    query = session.query(sdc.Mod.date_update, sdc.Mod.date_request).filter(sdc.Mod.id == mod_id)
+    query = query.filter(sdc.Mod.condition == 0).first()
+
+    if query != None:
+        db_request = query.date_request
+        if wait_time-db_request > timedelta(hours=3):
+            session.query(sdc.Mod).filter_by(id=mod_id).update({"date_request": wait_time})
+            session.commit()
+
+            mod = stt.get_mod(str(mod_id))
+
+            if mod != None: # Проверяем, существует ли запрашиваемый мод на серверах Steam
+                mod_update = datetime.fromtimestamp(mod["time_updated"])
+                db_datetime = query.date_update
+
+                # Проверка, нужно ли обновить мод
+                print(db_datetime, mod_update)
+                if db_datetime < mod_update:  # Проверка надо ли обновляться
+
+                    todo_download[mod_id] = [mod, wait_time, True]
+
+                    session.query(sdc.Mod).filter_by(id=mod_id).update(
+                        {'condition': 3, "date_update": datetime.fromtimestamp(mod['time_updated'])}
+                    )
+                    session.commit()
+
+                    session.close()
+                    return JSONResponse(status_code=202, content={"message": "task of updating is set", "error_id": 0})
+                else:
+                    session.close()
+                    return JSONResponse(status_code=208, content={"message": "mod already update", "error_id": 4})
+            else:
+                session.close()
+                return JSONResponse(status_code=404, content={"message": "mod not found on steam", "error_id": 2})
+        else:
+            session.close()
+            return JSONResponse(status_code=425, content={"message": "check for relevance was made earlier", "error_id": 3})
+    else:
+        session.close()
+        return JSONResponse(status_code=404, content={"message": "mod not found on locale", "error_id": 1})
 
 @app.get("/list/mods/")
 async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", tags = [],
