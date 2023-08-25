@@ -321,15 +321,16 @@ async def download(mod_id: int):
 @app.get("/list/mods/")
 async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", tags = [],
                    games = [], allowed_ids = [], dependencies: bool = False, primary_sources = [], name: str = "",
-                   short_description: bool = False, description: bool = False, dates: bool = False):
+                   short_description: bool = False, description: bool = False, dates: bool = False, general: bool = True):
     """
     Возвращает список модов к конкретной игре, которые есть на сервере. Не до конца провалидированные моды в список не попадают.
 
-    1. `page_size` - размер 1 страницы. Диапазон - 1...50 элементов.
-    2. `page` - номер странице. Не должна быть отрицательной.
-    3. `short_description` - отправлять ли короткое описание мода в ответе. В длину оно максимум 256 символов. По умолчанию `False`.
-    4. `description` - отправлять ли полное описание мода в ответе. По умолчанию `False`.
-    5. `dates` - отправлять ли дату последнего обновления и дату создания в ответе. По умолчанию `False`.
+    1. `page_size` *(int)* - размер 1 страницы. Диапазон - 1...50 элементов.
+    2. `page` *(int)* - номер странице. Не должна быть отрицательной.
+    3. `short_description` *(bool)* - отправлять ли короткое описание мода в ответе. В длину оно максимум 256 символов. По умолчанию `False`.
+    4. `description` *(bool)* - отправлять ли полное описание мода в ответе. По умолчанию `False`.
+    5. `dates` *(bool)* - отправлять ли дату последнего обновления и дату создания в ответе. По умолчанию `False`.
+    6. `general` *(bool)* - отправлять ли базовые поля *(название, размер, источник, количество загрузок)*. По умолчанию `True`.
 
     О сортировке:
     Префикс `i` указывает что сортировка должна быть инвертированной.
@@ -368,13 +369,15 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     Session = sessionmaker(bind=sdc.engine)
     session = Session()
     # Выполнение запроса
-    query = session.query(sdc.Mod.id, sdc.Mod.name, sdc.Mod.size, sdc.Mod.source, sdc.Mod.downloads)
+    query = session.query(sdc.Mod.id)
     if description:
         query = query.add_columns(sdc.Mod.description)
     if short_description:
         query = query.add_column(sdc.Mod.short_description)
     if dates:
         query = query.add_columns(sdc.Mod.date_update, sdc.Mod.date_creation)
+    if general:
+        query = query.add_columns(sdc.Mod.name, sdc.Mod.size, sdc.Mod.source, sdc.Mod.downloads)
 
     query = query.order_by(tool.sort_mods(sort))
     query = query.filter(sdc.Mod.condition == 0)
@@ -414,7 +417,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
 
     output_mods = []
     for mod in mods:
-        out = {"id": mod.id, "name": mod.name, "size": mod.size, "source": mod.source, "downloads": mod.downloads}
+        out = {"id": mod.id}
         if description:
             out["description"] = mod.description
         if short_description:
@@ -422,6 +425,12 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
         if dates:
             out["date_update"] = mod.date_update
             out["date_creation"] = mod.date_creation
+        if general:
+            out["name"] = mod.name
+            out["size"] = mod.size
+            out["source"] = mod.source
+            out["downloads"] = mod.downloads
+
         output_mods.append(out)
 
     # Вывод результатов
@@ -671,7 +680,7 @@ async def game_info(game_id: int, short_description: bool = False, description: 
 
 
 @app.get("/info/mod/{mod_id}")
-async def mod_info(mod_id: int, dependencies: bool = False, short_description: bool = False, description: bool = False, dates: bool = False):
+async def mod_info(mod_id: int, dependencies: bool = False, short_description: bool = False, description: bool = False, dates: bool = False, general: bool = True):
     """
     Возвращает информацию о конкретной игре.
 
@@ -680,6 +689,8 @@ async def mod_info(mod_id: int, dependencies: bool = False, short_description: b
     3. `short_description` *(bool)* - отправлять ли короткое описание мода в ответе. В длину оно максимум 256 символов. По умолчанию `False`.
     4. `description` *(bool)* - отправлять ли полное описание мода в ответе. По умолчанию `False`.
     5. `dates` *(bool)* - отправлять ли дату последнего обновления и дату создания в ответе. По умолчанию `False`.
+    6. `general` *(bool)* - отправлять ли базовые поля *(название, размер, источник, количество загрузок)*. По умолчанию `True`.
+
 
     Я не верю что в зависимостях мода будет более 20 элементов, поэтому такое ограничение.
     Но если все-таки такой мод будет, то без ограничения мой сервер может лечь от нагрузки.
@@ -693,13 +704,15 @@ async def mod_info(mod_id: int, dependencies: bool = False, short_description: b
     session = Session()
 
     # Выполнение запроса
-    query = session.query(sdc.Mod.name, sdc.Mod.size, sdc.Mod.condition, sdc.Mod.source, sdc.Mod.downloads)
+    query = session.query(sdc.Mod.condition)
     if description:
         query = query.add_columns(sdc.Mod.description)
     if short_description:
         query = query.add_column(sdc.Mod.short_description)
     if dates:
         query = query.add_columns(sdc.Mod.date_update, sdc.Mod.date_creation)
+    if general:
+        query = query.add_columns(sdc.Mod.name, sdc.Mod.size, sdc.Mod.source, sdc.Mod.downloads)
 
 
     query = query.filter(sdc.Mod.id == mod_id)
@@ -718,9 +731,7 @@ async def mod_info(mod_id: int, dependencies: bool = False, short_description: b
     session.close()
 
     if output["pre_result"]:
-        output["result"] = {"name": output["pre_result"].name, "size": output["pre_result"].size,
-                            "condition": output["pre_result"].condition, "source": output["pre_result"].source,
-                            "downloads": output["pre_result"].downloads}
+        output["result"] = {"condition": output["pre_result"].condition}
         if description:
             output["result"]["description"] = output["pre_result"].description
         if short_description:
@@ -728,6 +739,11 @@ async def mod_info(mod_id: int, dependencies: bool = False, short_description: b
         if dates:
             output["result"]["date_update"] = output["pre_result"].date_update
             output["result"]["date_creation"] = output["pre_result"].date_creation
+        if general:
+            output["result"]["name"] = output["pre_result"].name
+            output["result"]["size"] = output["pre_result"].size
+            output["result"]["source"] = output["pre_result"].source
+            output["result"]["downloads"] = output["pre_result"].downloads
     else:
         output["result"] = None
     del output["pre_result"]
