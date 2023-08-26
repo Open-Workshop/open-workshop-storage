@@ -28,6 +28,7 @@ type_map = {
     "files_sent": {"ru": "Файлов отправлено с сервера"},
     "damaged_mod": {"ru": "Обнаружено поврежденных записей"},
     "/download/steam/": {"ru": "Запросов к загрузке со Steam"},
+    "/update/steam/": {"ru": "Запросов на актуализацию информации"},
     "download_from_steam_error": {"ru": "Загрузок со Steam окончено провалом"},
     "download_from_steam_ok": {"ru": "Загрузок со Steam прошло успешно"},
     "updating_mod": {"ru": "Модов поставлено на обновление"},
