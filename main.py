@@ -372,10 +372,10 @@ async def mod_data_update(mod_id: int):
                     return JSONResponse(status_code=208, content={"message": "mod already update", "error_id": 4})
             else:
                 session.close()
-                return JSONResponse(status_code=404, content={"message": "mod not found on steam", "error_id": 2})
+                return JSONResponse(status_code=404, content={"message": "mod not found on steam", "error_id": 3})
         else:
             session.close()
-            return JSONResponse(status_code=425, content={"message": "check for relevance was made earlier", "error_id": 3})
+            return JSONResponse(status_code=425, content={"message": "check for relevance was made earlier", "error_id": 2})
     else:
         session.close()
         return JSONResponse(status_code=404, content={"message": "mod not found on locale", "error_id": 1})
