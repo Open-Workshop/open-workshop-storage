@@ -652,14 +652,14 @@ async def list_genres(page_size: int = 10, page: int = 0):
     return {"database_size": genres_count, "offset": offset, "results": genres}
 
 
-@app.get("/list/resources_mods/{mod_id}")
-async def list_resources_mods(mod_id: int, page_size: int = 10, page: int = 0, types_resources = []):
+@app.get("/list/resources_mods/{mods_list_id}")
+async def list_resources_mods(mods_list_id, page_size: int = 10, page: int = 0, types_resources = []):
     """
-    Возвращает список ресурсов у конкретного мода.
+    Возвращает список ресурсов у конкретного мода/списка модов.
 
     1. `page_size` *(int)* - размер 1 страницы. Диапазон - 1...50 элементов.
-    2. `page` *(int)* - номер странице. Не должна быть отрицательной.
-    3. `types_resources` *(list[str])* - фильтрация по типам ресурсов. *(`logo` / `screenshot`)*, ограничение - 20 элементов.
+    2. `page` *(int)* - номер страницы. Не должна быть отрицательной.
+    3. `types_resources` *(list[str])* - фильтрация по типам ресурсов. *(`logo` / `screenshot`)*, ограничение - 40 элементов.
     """
     stc.update("/list/resources_mods/")
 
@@ -667,8 +667,9 @@ async def list_resources_mods(mod_id: int, page_size: int = 10, page: int = 0, t
         return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
 
     types_resources = tool.str_to_list(types_resources)
+    mods_list_id = tool.str_to_list(mods_list_id)
 
-    if len(types_resources) > 20:
+    if len(types_resources)+len(mods_list_id) > 40:
         return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 30 elements in sum", "error_id": 2})
 
     # Создание сессии
@@ -676,7 +677,7 @@ async def list_resources_mods(mod_id: int, page_size: int = 10, page: int = 0, t
     session = Session()
     # Выполнение запроса
     query = session.query(sdc.ResourceMod)
-    query = query.filter(sdc.ResourceMod.owner_id == mod_id)
+    query = query.filter(sdc.ResourceMod.owner_id.in_(mods_list_id))
 
     # Фильтрация по типу
     if len(types_resources) > 0:
