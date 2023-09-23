@@ -625,6 +625,44 @@ async def list_tags(game_id: int, page_size: int = 10, page: int = 0):
     return {"database_size": tags_count, "offset": offset, "results": tags}
 
 
+@app.get("/list/tags/mods/{mods_ids_list}")
+async def list_tags_for_mods(mods_ids_list, tags = [], only_ids: bool = False):
+    """
+    Возвращает ассоциации модов с тегами
+
+    1. `mods_ids_list` - список модов к которым нужно вернуть ассоциации (принимает список ID модов).
+    2. `tags` - если не пуст возвращает ассоциации конкретно с этими тегами (принимает список ID тегов).
+    3. `only_ids` - если True возвращает только ID ассоцируемых тегов, если False возвращает всю информацию о каждом ассоцируемом теге.
+    """
+    stc.update("/list/tags/mods/")
+
+    mods_ids_list = tool.str_to_list(mods_ids_list)
+    tags = tool.str_to_list(tags)
+
+    if (len(mods_ids_list)+len(tags)) > 80:
+        return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 80 elements in sum", "error_id": 1})
+
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
+
+    # Выполнение запроса
+    result = {}
+    query_global = session.query(sdc.ModTag).join(sdc.mods_tags)
+    for mod_id in mods_ids_list:
+        query = query_global.filter(sdc.mods_tags.c.mod_id == mod_id)
+        if len(tags) > 0:
+            query = query.filter(sdc.ModTag.id.in_(tags))
+
+        if only_ids:
+            if result.get(mod_id, None) == None: result[mod_id] = []
+            for id in query.all(): result[mod_id].append(id.id)
+        else:
+            result[mod_id] = query.all()
+
+    return result
+
+
 @app.get("/list/genres")
 async def list_genres(page_size: int = 10, page: int = 0):
     """
@@ -652,25 +690,63 @@ async def list_genres(page_size: int = 10, page: int = 0):
     return {"database_size": genres_count, "offset": offset, "results": genres}
 
 
+@app.get("/list/genres/games/{games_ids_list}")
+async def list_genres_for_games(games_ids_list, genres = [], only_ids: bool = False):
+    """
+    Возвращает ассоциации игр с жанрами
+
+    1. `games_ids_list` - список игр к которым нужно вернуть ассоциации (принимает список ID игр).
+    2. `genres` - если не пуст возвращает ассоциации конкретно с этими жанрами (принимает список ID жанров).
+    3. `only_ids` - если True возвращает только ID ассоцируемых жанров, если False возвращает всю информацию о каждом ассоцируемом жанре.
+    """
+    stc.update("/list/genres/games/")
+
+    games_ids_list = tool.str_to_list(games_ids_list)
+    genres = tool.str_to_list(genres)
+
+    if (len(games_ids_list)+len(genres)) > 80:
+        return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 80 elements in sum", "error_id": 2})
+
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
+
+    # Выполнение запроса
+    result = {}
+    query_global = session.query(sdc.Genres).join(sdc.game_genres)
+    for game_id in games_ids_list:
+        query = query_global.filter(sdc.game_genres.c.game_id == game_id)
+        if len(genres) > 0:
+            query = query.filter(sdc.Genres.id.in_(genres))
+
+        if only_ids:
+            if result.get(game_id, None) == None: result[game_id] = []
+            for id in query.all(): result[game_id].append(id.id)
+        else:
+            result[game_id] = query.all()
+
+    return result
+
+
 @app.get("/list/resources_mods/{mods_list_id}")
 async def list_resources_mods(mods_list_id, page_size: int = 10, page: int = 0, types_resources = []):
     """
     Возвращает список ресурсов у конкретного мода/списка модов.
 
-    1. `page_size` *(int)* - размер 1 страницы. Диапазон - 1...50 элементов.
+    1. `page_size` *(int)* - размер 1 страницы. Диапазон - 1...70 элементов.
     2. `page` *(int)* - номер страницы. Не должна быть отрицательной.
-    3. `types_resources` *(list[str])* - фильтрация по типам ресурсов. *(`logo` / `screenshot`)*, ограничение - 40 элементов.
+    3. `types_resources` *(list[str])* - фильтрация по типам ресурсов. *(`logo` / `screenshot`)*, ограничение - 80 элементов.
     """
     stc.update("/list/resources_mods/")
 
-    if page_size > 50 or page_size < 1:
+    if page_size > 70 or page_size < 1:
         return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
 
     types_resources = tool.str_to_list(types_resources)
     mods_list_id = tool.str_to_list(mods_list_id)
 
-    if len(types_resources)+len(mods_list_id) > 40:
-        return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 30 elements in sum", "error_id": 2})
+    if len(types_resources)+len(mods_list_id) > 80:
+        return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 80 elements in sum", "error_id": 2})
 
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
