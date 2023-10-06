@@ -819,7 +819,8 @@ async def game_info(game_id: int, short_description: bool = False, description: 
 
 
 @app.get("/info/mod/{mod_id}")
-async def mod_info(mod_id: int, dependencies: bool = False, short_description: bool = False, description: bool = False, dates: bool = False, general: bool = True):
+async def mod_info(mod_id: int, dependencies: bool = False, short_description: bool = False, description: bool = False,
+                   dates: bool = False, general: bool = True, game: bool = False):
     """
     Возвращает информацию о конкретной игре.
 
@@ -829,6 +830,7 @@ async def mod_info(mod_id: int, dependencies: bool = False, short_description: b
     4. `description` *(bool)* - отправлять ли полное описание мода в ответе. По умолчанию `False`.
     5. `dates` *(bool)* - отправлять ли дату последнего обновления и дату создания в ответе. По умолчанию `False`.
     6. `general` *(bool)* - отправлять ли базовые поля *(название, размер, источник, количество загрузок)*. По умолчанию `True`.
+    7. `game` *(bool)* - отправлять ли краткую информацию *(id+название)* об игре-владельце. По умолчанию `False`.
 
 
     Я не верю что в зависимостях мода будет более 20 элементов, поэтому такое ограничение.
@@ -866,6 +868,13 @@ async def mod_info(mod_id: int, dependencies: bool = False, short_description: b
         output["dependencies"] = [row[0] for row in result]
         output["dependencies_count"] = count
 
+    if game:
+        game_id = session.query(sdc.games_mods).filter(sdc.games_mods.c.mod_id == mod_id).first().game_id
+        query = session.query(sdc.Game.name).filter(sdc.Game.id == game_id)
+
+        result = query.first()
+        output["game"] = {"id": game_id, "name": result.name}
+
     #Закрытие сессии
     session.close()
 
@@ -883,6 +892,9 @@ async def mod_info(mod_id: int, dependencies: bool = False, short_description: b
             output["result"]["size"] = output["pre_result"].size
             output["result"]["source"] = output["pre_result"].source
             output["result"]["downloads"] = output["pre_result"].downloads
+        if game:
+            output["result"]["game"] = output["game"]
+            del output["game"]
     else:
         output["result"] = None
     del output["pre_result"]
