@@ -38,7 +38,7 @@ def zipping(game_id: int, mod_id: int, target_size: int) -> bool: \
     print(f"mod size total  {total_size}")
 
     # Проверяем полностью ли установился мод
-    if total_size != target_size:
+    if total_size != target_size or target_size <= 0:
         os.remove(zip_path)
         return False
     else:
