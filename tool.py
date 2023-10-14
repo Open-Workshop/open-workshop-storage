@@ -111,19 +111,19 @@ def sort_games(sort_by: str):
 def downloads_count_update(session, mod):
     # Может работать не сильно наглядно из-за кеширования браузера.
     # Т.е. несколько запросов подряд не увеличит кол-во загрузок!
-    session.query(sdc.Mod).filter_by(id=int(mod.id)).update(
-        {'downloads': mod.downloads + 1, 'date_request': datetime.now()})
+    query = session.query(sdc.Mod).filter_by(id=int(mod.id))
+    query.update({'downloads': mod.downloads + 1, 'date_request': datetime.now()})
 
     # Проходит по всем связанным играм и устанавливает количество скачиваний +1
-    for game in mod.associated_games:
-        game.mods_downloads += 1
+    game = session.query(sdc.Game).filter_by(id=query.first().game)
+    game.update({"mods_downloads": game.first().mods_downloads+1})
 
     session.commit()
 
 
 def get_mods_count(session, game_id: int):
-    query = session.query(sdc.games_mods)
-    query = query.filter(sdc.games_mods.c.game_id == int(game_id))
+    query = session.query(sdc.Mod)
+    query = query.filter(sdc.Mod.game == int(game_id))
     return query.count()
 
 

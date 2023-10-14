@@ -23,11 +23,6 @@ mods_tags = Table('unity_mods_tags', base.metadata, # Теги для игр
     Column('tag_id', Integer, ForeignKey('tags.id'))
 )
 
-games_mods = Table('unity_games_mods', base.metadata, # Принадлежность мода игре
-    Column('game_id', Integer, ForeignKey('games.id')),
-    Column('mod_id', Integer, ForeignKey('mods.id'))
-)
-
 mods_dependencies = Table('unity_mods_dependencies', base.metadata, # Зависимости мода
     Column('mod_id', Integer, ForeignKey('mods.id')),
     Column('dependence', Integer, ForeignKey('mods.id')),
@@ -53,7 +48,6 @@ class Game(base): # Таблица "игры"
 
     source = Column(String)
 
-    associated_mods = relationship('Mod', secondary=games_mods, backref='games', viewonly=True)
     genres = relationship('Genres', secondary=game_genres, backref='games')
     allowed_tags_for_mods = relationship('ModTag', secondary=allowed_mods_tags, backref='games', viewonly=True)
 
@@ -81,7 +75,7 @@ class Mod(base): # Таблица "моды"
         secondaryjoin=(mods_dependencies.c.dependence == id), backref='mods',
         foreign_keys=[mods_dependencies.c.mod_id, mods_dependencies.c.dependence]
     )
-    associated_games = relationship('Game', secondary=games_mods, backref='mods')
+    game = Column(Integer)
 
 class ResourceMod(base): # Ресурсы (скриншоты и лого)
     __tablename__ = 'resources_mods'

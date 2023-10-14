@@ -168,7 +168,6 @@ async def mod_dowloader_request(mod_id: int):
             stc.update("damaged_mod")
             session = Session()
             # Если загрузка окончена ошибкой
-            delete_binding = sdc.games_mods.delete().where(sdc.games_mods.c.mod_id == int(mod_id))
             delete_statement = delete(sdc.Mod).where(sdc.Mod.id == int(mod_id))
             delete_tags = sdc.mods_tags.delete().where(sdc.mods_tags.c.mod_id == int(mod_id))
             delete_dep = sdc.mods_dependencies.delete().where(
@@ -176,7 +175,6 @@ async def mod_dowloader_request(mod_id: int):
             delete_resources = delete(sdc.ResourceMod).where(sdc.ResourceMod.owner_id == int(mod_id))
             # Выполнение операции DELETE
             session.execute(delete_statement)
-            session.execute(delete_binding)
             session.execute(delete_tags)
             session.execute(delete_dep)
             session.execute(delete_resources)
@@ -200,7 +198,8 @@ async def mod_dowloader_request(mod_id: int):
             date_update=datetime.fromtimestamp(mod['time_updated']),
             date_request=datetime.now(),
             source="steam",
-            downloads=0
+            downloads=0,
+            game=mod["consumer_app_id"]
         )
         # Выполнение операции INSERT
         session.execute(insert_statement)
@@ -241,12 +240,6 @@ def mod_dowload(mod_data:dict, wait_time):
     if ok: #Если загрузка прошла успешно
         stc.update("download_from_steam_ok")
 
-        insert_statement = insert(sdc.games_mods).values(
-            mod_id=mod_data['publishedfileid'],
-            game_id=mod_data['consumer_app_id']
-        )
-
-        session.execute(insert_statement)
         session.query(sdc.Mod).filter_by(id=int(mod_data['publishedfileid'])).update({'condition': 1})
         session.commit()
 
@@ -258,13 +251,11 @@ def mod_dowload(mod_data:dict, wait_time):
     else:
         stc.update("download_from_steam_error")
         # Если загрузка окончена ошибкой
-        delete_binding = sdc.games_mods.delete().where(sdc.games_mods.c.mod_id == int(mod_data['publishedfileid']))
         delete_statement = delete(sdc.Mod).where(sdc.Mod.id == int(mod_data['publishedfileid']))
         delete_tags = sdc.mods_tags.delete().where(sdc.mods_tags.c.mod_id == int(mod_data['publishedfileid']))
         delete_dep = sdc.mods_dependencies.delete().where(sdc.mods_dependencies.c.mod_id == int(mod_data['publishedfileid']))
         # Выполнение операции DELETE
         session.execute(delete_statement)
-        session.execute(delete_binding)
         session.execute(delete_tags)
         session.execute(delete_dep)
         session.commit()
@@ -382,7 +373,7 @@ async def mod_data_update(mod_id: int):
 
 @app.get("/list/mods/")
 async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", tags = [],
-                   games = [], allowed_ids = [], dependencies: bool = False, primary_sources = [], name: str = "",
+                   game:int = -1, allowed_ids = [], dependencies: bool = False, primary_sources = [], name: str = "",
                    short_description: bool = False, description: bool = False, dates: bool = False, general: bool = True):
     """
     Возвращает список модов к конкретной игре, которые есть на сервере. Не до конца провалидированные моды в список не попадают.
@@ -418,13 +409,12 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     stc.update("/list/mods/")
 
     tags = tool.str_to_list(tags)
-    games = tool.str_to_list(games)
     primary_sources = tool.str_to_list(primary_sources)
     allowed_ids = tool.str_to_list(allowed_ids)
 
     if page_size > 50 or page_size < 1:
         return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
-    elif (len(tags)+len(games)+len(primary_sources)+len(allowed_ids)) > 30:
+    elif (len(tags)+len(primary_sources)+len(allowed_ids)) > 30:
         return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 30 elements in sum", "error_id": 2})
 
     # Создание сессии
@@ -454,9 +444,8 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
         query = query.filter(sdc.Mod.id.in_(allowed_ids))
 
     # Фильтрация по играм
-    if len(games) > 0:
-        for game_id in games:
-            query = query.filter(sdc.Mod.games.any(sdc.Game.id == game_id))
+    if game > 0:
+        query = query.filter(sdc.Mod.game == game)
 
     # Фильтрация по первоисточникам
     if len(primary_sources) > 0:
@@ -854,6 +843,8 @@ async def mod_info(mod_id: int, dependencies: bool = False, short_description: b
         query = query.add_columns(sdc.Mod.date_update, sdc.Mod.date_creation)
     if general:
         query = query.add_columns(sdc.Mod.name, sdc.Mod.size, sdc.Mod.source, sdc.Mod.downloads)
+    if game:
+        query = query.add_columns(sdc.Mod.game)
 
 
     query = query.filter(sdc.Mod.id == mod_id)
@@ -869,11 +860,9 @@ async def mod_info(mod_id: int, dependencies: bool = False, short_description: b
         output["dependencies_count"] = count
 
     if game:
-        game_id = session.query(sdc.games_mods).filter(sdc.games_mods.c.mod_id == mod_id).first().game_id
-        query = session.query(sdc.Game.name).filter(sdc.Game.id == game_id)
+        result = session.query(sdc.Game.name).filter(sdc.Game.id == output["pre_result"].game).first()
 
-        result = query.first()
-        output["game"] = {"id": game_id, "name": result.name}
+        output["game"] = {"id": output["pre_result"].game, "name": result.name}
 
     #Закрытие сессии
     session.close()
@@ -1156,13 +1145,11 @@ if threads.get("start", None) == None:
             print(f"Ошибка удаления папки/архива битого мода с ID - {mod.id}")
 
         # Если загрузка окончена ошибкой
-        delete_binding = sdc.games_mods.delete().where(sdc.games_mods.c.mod_id == int(mod.id))
         delete_statement = delete(sdc.Mod).where(sdc.Mod.id == int(mod.id))
         delete_tags = sdc.mods_tags.delete().where(sdc.mods_tags.c.mod_id == int(mod.id))
         delete_dep = sdc.mods_dependencies.delete().where(sdc.mods_dependencies.c.mod_id == int(mod.id))
         # Выполнение операции DELETE
         session.execute(delete_statement)
-        session.execute(delete_binding)
         session.execute(delete_tags)
         session.execute(delete_dep)
         session.commit()

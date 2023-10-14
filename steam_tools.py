@@ -107,29 +107,20 @@ def get_app(id:int):
 
 def checker(rows, steam_path, mod_id, session):
     if rows is not None and len(rows) > 0:  # Если в БД уже есть запись об этом моде
-        bind = session.query(sdc.games_mods).filter_by(mod_id=int(mod_id)).all()
-        if bind != None and len(bind) > 0:
-            bind = bind[0].game_id
-        else:
-            bind = "null"
-
-        print(bind)
         print(mod_id)
-        path_real = f'mods/{bind}/{mod_id}'  # Получаем реальный путь до файла
+        path_real = f'mods/{rows[0].game}/{mod_id}'  # Получаем реальный путь до файла
         if os.path.isfile(path_real+'.zip'):  # Если это ZIP архив - отправляем
             return FileResponse(path=path_real+'.zip', filename=f"{rows[0].name}.zip")
-        elif os.path.isdir(steam_path+f'{bind}/{mod_id}'):  # Если это по какой-то причине - папка
+        elif os.path.isdir(steam_path+f'{rows[0].game}/{mod_id}'):  # Если это по какой-то причине - папка
             # Пытаемся фиксануть проблему
-            tool.zipping(game_id=bind, mod_id=mod_id)
+            tool.zipping(game_id=rows[0].game, mod_id=mod_id)
 
             # Шлем пользователю
             return FileResponse(path=path_real+'.zip', filename=f"{rows[0].name}.zip")
         else:  # Удаляем запись в БД как не действительную
-            delete_bind = delete(sdc.games_mods).where(sdc.games_mods.mod_id == int(mod_id))
             delete_statement = delete(sdc.Mod).where(sdc.Mod.id == int(mod_id))
             # Выполнение операции DELETE
             session.execute(delete_statement)
-            session.execute(delete_bind)
             session.commit()
     return None
 
