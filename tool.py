@@ -58,23 +58,23 @@ def sort_mods(sort_by: str):
             return sdc.Mod.size
         case 'iSIZE':
             return desc(sdc.Mod.size)
-        case 'DATE_CREATION':
+        case 'CREATION_DATE':
             return sdc.Mod.date_creation
-        case 'iDATE_CREATION':
+        case 'iCREATION_DATE':
             return desc(sdc.Mod.date_creation)
-        case 'DATE_UPDATE':
+        case 'UPDATE_DATE':
             return sdc.Mod.date_update
-        case 'iDATE_UPDATE':
+        case 'iUPDATE_DATE':
             return desc(sdc.Mod.date_update)
-        case 'DATE_REQUEST':
+        case 'REQUEST_DATE':
             return sdc.Mod.date_request
-        case 'iDATE_REQUEST':
+        case 'iREQUEST_DATE':
             return desc(sdc.Mod.date_request)
         case 'SOURCE':
             return sdc.Mod.source
         case 'iSOURCE':
             return desc(sdc.Mod.source)
-        case 'iDOWNLOADS':
+        case 'iMOD_DOWNLOADS':
             return desc(sdc.Mod.downloads)
         case _:
             return sdc.Mod.downloads  # По умолчанию сортируем по загрузкам
@@ -100,9 +100,9 @@ def sort_games(sort_by: str):
             return desc(sdc.Game.source)
         case 'MODS_COUNT':
             return sdc.Game.mods_count
-        case 'iMODS_COUNT':
+        case 'iMOD_COUNT':
             return desc(sdc.Game.mods_count)
-        case 'MODS_DOWNLOADS':
+        case 'MOD_DOWNLOADS':
             return sdc.Game.mods_downloads
         case _:
             return desc(sdc.Game.mods_downloads)
