@@ -1113,6 +1113,18 @@ async def statistics_type_map(request: Request):
     # Например, вы можете вернуть список языковых кодов в формате JSON
     return {"language": select_language, "result": stc.cache_types_data(select_language)}
 
+@app.get("/test/access")
+async def test_access(request: Request):
+    """
+    Тестовая функция доступа для общения между микросервисами
+    """
+    import pprint
+    pprint.pprint(request.__dict__)
+    return {
+        "user ip": request.client.host,
+        "user port": request.client.port,
+        "requested url(target server)": request.url._url
+    }
 
 def init():
     steam = SteamCMD("steam_client")
