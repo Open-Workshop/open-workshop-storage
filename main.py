@@ -1118,7 +1118,7 @@ async def test_access(request: Request):
     """
     Тестовая функция доступа для общения между микросервисами
     """
-    return 404
+    #return 404
     import pprint
     pprint.pprint(request.__dict__)
     return {
