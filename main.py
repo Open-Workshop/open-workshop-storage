@@ -4,6 +4,7 @@ import tool
 import shutil
 import threading
 import statistics
+from sql_access_errors import access
 import steam_tools as stt
 import sql_data_client as sdc
 import sql_statistics_client as stc
@@ -14,8 +15,6 @@ from sqlalchemy.sql.expression import desc
 from datetime import datetime, date, timedelta
 from pysteamcmdwrapper import SteamCMD, SteamCMDException
 from starlette.responses import JSONResponse, FileResponse, RedirectResponse
-
-
 
 WORKSHOP_DIR = os.path.join(os.getcwd())
 path = 'steam/steamapps/workshop/content/'
@@ -40,10 +39,11 @@ parallel = 2
 
 todo_download = {}
 
+
 def todo_exe():
     global todo_download, threads, sis_threads_count, parallel
 
-    if len(todo_download) > 0:# and len(threads) <= sis_threads_count+parallel:
+    if len(todo_download) > 0:  # and len(threads) <= sis_threads_count+parallel:
         tod = todo_download[list(todo_download.keys())[0]]
         name = f"{tod[0]['consumer_app_id']}/{tod[0]['publishedfileid']}"
         threads[name] = threading.Thread(target=mod_dowload, args=(tod[0], datetime.now(),), name=name)
@@ -52,8 +52,8 @@ def todo_exe():
 
     time.sleep(1)
 
-    #Создаем новый туду процесс и даем этому умереть
-    #Самовызов это рекурсия который со временем переполнит стек
+    # Создаем новый туду процесс и даем этому умереть
+    # Самовызов это рекурсия который со временем переполнит стек
     threads["todo"] = threading.Thread(target=todo_exe, name="todo")
     threads["todo"].start()
 
@@ -61,6 +61,7 @@ def todo_exe():
 @app.on_event("startup")
 async def startup_event():
     app.state.max_concurrency = 50  # GPT сказал что это на что-то влияет :D
+
 
 @app.middleware("http")
 async def modify_header(request: Request, call_next):
@@ -103,7 +104,7 @@ async def mod_dowloader_request(mod_id: int):
 
     mod = stt.get_mod(str(mod_id))
 
-    if mod == None: # Проверяем, существует ли запрашиваемый мод на серверах Steam
+    if mod == None:  # Проверяем, существует ли запрашиваемый мод на серверах Steam
         output = stt.checker(rows=rows, steam_path=path, mod_id=mod_id, session=session)
         if output is not None:
             tool.downloads_count_update(session=session, mod=rows)
@@ -115,9 +116,11 @@ async def mod_dowloader_request(mod_id: int):
         stc.create_processing(type="download_steam_error", time_start=wait_time)
         stc.update("mod_not_found_local")
         return JSONResponse(status_code=404, content={"message": "this mod was not found", "error_id": 2})
-    elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}", None) == True or mod_id in todo_download.keys(): # Проверяем, загружаем ли этот ресурс прямо сейчас
+    elif threads.get(f"{str(mod['consumer_app_id'])}/{str(mod_id)}",
+                     None) == True or mod_id in todo_download.keys():  # Проверяем, загружаем ли этот ресурс прямо сейчас
         stc.create_processing(type="download_steam_error", time_start=wait_time)
-        return JSONResponse(status_code=102, content={"message": "your request is already being processed", "error_id": 3})
+        return JSONResponse(status_code=102,
+                            content={"message": "your request is already being processed", "error_id": 3})
 
     print(f"{mod_id in todo_download.keys()}", flush=True)
 
@@ -125,14 +128,15 @@ async def mod_dowloader_request(mod_id: int):
     zip_path = f'mods/{str(mod["consumer_app_id"])}/{str(mod_id)}.zip'
 
     updating = False
-    if (rows != None and len(rows) > 0) or os.path.isfile(zip_path) or os.path.isdir(real_path): # Проверяем есть ли запись на сервере в каком-либо виде
+    if (rows != None and len(rows) > 0) or os.path.isfile(zip_path) or os.path.isdir(
+            real_path):  # Проверяем есть ли запись на сервере в каком-либо виде
         if (rows != None and len(rows) > 0) and os.path.isfile(zip_path):  # Если это ZIP архив - отправляем
             mod_update = datetime.fromtimestamp(mod["time_updated"])
             db_datetime = rows[0].date_update
 
             # Проверка, нужно ли обновить мод
             print(db_datetime, mod_update)
-            if db_datetime >= mod_update: # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
+            if db_datetime >= mod_update:  # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
                 tool.downloads_count_update(session=session, mod=rows[0])
                 stc.create_processing(type="download_steam_ok", time_start=wait_time)
                 stc.update("files_sent")
@@ -146,7 +150,7 @@ async def mod_dowloader_request(mod_id: int):
 
             # Проверка, нужно ли обновить мод
             print(db_datetime, mod_update)
-            if db_datetime >= mod_update: # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
+            if db_datetime >= mod_update:  # дата добавления на сервер позже чем последнее обновление (не надо обновлять)
                 # Пытаемся фиксануть проблему
                 tool.zipping(game_id=rows[0].id, mod_id=mod_id, target_size=rows[0].size)
                 # Шлем пользователю
@@ -161,8 +165,8 @@ async def mod_dowloader_request(mod_id: int):
         # Чистим сервер
         if os.path.isdir(real_path):
             shutil.rmtree(real_path)
-        elif os.path.isfile(real_path+'.zip'):
-            os.remove(real_path+'.zip')
+        elif os.path.isfile(real_path + '.zip'):
+            os.remove(real_path + '.zip')
 
         if not updating:
             stc.update("damaged_mod")
@@ -181,10 +185,10 @@ async def mod_dowloader_request(mod_id: int):
             session.commit()
             session.close()
 
-    if threads["start"].is_alive(): #Проверяем, готов ли сервер обрабатывать запросы
+    if threads["start"].is_alive():  # Проверяем, готов ли сервер обрабатывать запросы
         stc.create_processing(type="download_steam_error", time_start=wait_time)
-        return JSONResponse(status_code=103, content={"message": "the server is not ready to process requests", "error_id": 1})
-
+        return JSONResponse(status_code=103,
+                            content={"message": "the server is not ready to process requests", "error_id": 1})
 
     if not updating:
         insert_statement = insert(sdc.Mod).values(
@@ -204,17 +208,20 @@ async def mod_dowloader_request(mod_id: int):
         # Выполнение операции INSERT
         session.execute(insert_statement)
     else:
-        session.query(sdc.Mod).filter_by(id=int(mod['publishedfileid'])).update({'condition': 3, "date_request": datetime.now(), "date_update": datetime.fromtimestamp(mod['time_updated'])})
+        session.query(sdc.Mod).filter_by(id=int(mod['publishedfileid'])).update(
+            {'condition': 3, "date_request": datetime.now(),
+             "date_update": datetime.fromtimestamp(mod['time_updated'])})
     session.commit()
 
     todo_download[mod_id] = [mod, wait_time, updating]
 
     session.close()
-    #Оповещаем пользователя, что его запрос принят в обработку
-    return JSONResponse(status_code=202, content={"message": "request added to queue", "error_id": 0, "updating": updating})
+    # Оповещаем пользователя, что его запрос принят в обработку
+    return JSONResponse(status_code=202,
+                        content={"message": "request added to queue", "error_id": 0, "updating": updating})
 
 
-def mod_dowload(mod_data:dict, wait_time):
+def mod_dowload(mod_data: dict, wait_time):
     steam = SteamCMD("steam_client")
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
@@ -224,20 +231,21 @@ def mod_dowload(mod_data:dict, wait_time):
         {'condition': 2, "date_update": datetime.fromtimestamp(mod_data['time_updated'])})
     session.commit()
 
-
     print(f"Поставлена задача на загрузку: {mod_data['consumer_app_id']}/{mod_data['publishedfileid']}", flush=True)
 
-    wait_steam = threading.Thread(target=steam.workshop_update, args=(mod_data['consumer_app_id'], mod_data['publishedfileid'], WORKSHOP_DIR,), name=f"{mod_data['publishedfileid']}/steam_wait")
+    wait_steam = threading.Thread(target=steam.workshop_update,
+                                  args=(mod_data['consumer_app_id'], mod_data['publishedfileid'], WORKSHOP_DIR,),
+                                  name=f"{mod_data['publishedfileid']}/steam_wait")
     wait_steam.start()
     # Ждем максимум 1 минуту
     wait_steam.join(timeout=60)
 
-
-    ok = tool.zipping(game_id=mod_data['consumer_app_id'], mod_id=mod_data['publishedfileid'], target_size=mod_data['file_size'])
+    ok = tool.zipping(game_id=mod_data['consumer_app_id'], mod_id=mod_data['publishedfileid'],
+                      target_size=mod_data['file_size'])
 
     print(f"Загрузка завершена: {mod_data['consumer_app_id']}/{mod_data['publishedfileid']}", flush=True)
 
-    if ok: #Если загрузка прошла успешно
+    if ok:  # Если загрузка прошла успешно
         stc.update("download_from_steam_ok")
 
         session.query(sdc.Mod).filter_by(id=int(mod_data['publishedfileid'])).update({'condition': 1})
@@ -253,7 +261,8 @@ def mod_dowload(mod_data:dict, wait_time):
         # Если загрузка окончена ошибкой
         delete_statement = delete(sdc.Mod).where(sdc.Mod.id == int(mod_data['publishedfileid']))
         delete_tags = sdc.mods_tags.delete().where(sdc.mods_tags.c.mod_id == int(mod_data['publishedfileid']))
-        delete_dep = sdc.mods_dependencies.delete().where(sdc.mods_dependencies.c.mod_id == int(mod_data['publishedfileid']))
+        delete_dep = sdc.mods_dependencies.delete().where(
+            sdc.mods_dependencies.c.mod_id == int(mod_data['publishedfileid']))
         # Выполнение операции DELETE
         session.execute(delete_statement)
         session.execute(delete_tags)
@@ -265,6 +274,7 @@ def mod_dowload(mod_data:dict, wait_time):
 
     global threads
     del threads[f"{mod_data['consumer_app_id']}/{mod_data['publishedfileid']}"]
+
 
 @app.get("/download/{mod_id}")
 async def download(mod_id: int):
@@ -311,6 +321,7 @@ async def download(mod_id: int):
     stc.update("mod_not_found_local")
     return JSONResponse(status_code=404, content={"message": "the mod is not on the server", "error_id": 1})
 
+
 @app.get("/update/steam/{mod_id}")
 async def mod_data_update(mod_id: int):
     """
@@ -335,13 +346,13 @@ async def mod_data_update(mod_id: int):
 
     if query != None:
         db_request = query.date_request
-        if wait_time-db_request > timedelta(hours=3):
+        if wait_time - db_request > timedelta(hours=3):
             session.query(sdc.Mod).filter_by(id=mod_id).update({"date_request": wait_time})
             session.commit()
 
             mod = stt.get_mod(str(mod_id))
 
-            if mod != None: # Проверяем, существует ли запрашиваемый мод на серверах Steam
+            if mod != None:  # Проверяем, существует ли запрашиваемый мод на серверах Steam
                 mod_update = datetime.fromtimestamp(mod["time_updated"])
                 db_datetime = query.date_update
 
@@ -366,15 +377,18 @@ async def mod_data_update(mod_id: int):
                 return JSONResponse(status_code=404, content={"message": "mod not found on steam", "error_id": 3})
         else:
             session.close()
-            return JSONResponse(status_code=425, content={"message": "check for relevance was made earlier", "error_id": 2})
+            return JSONResponse(status_code=425,
+                                content={"message": "check for relevance was made earlier", "error_id": 2})
     else:
         session.close()
         return JSONResponse(status_code=404, content={"message": "mod not found on locale", "error_id": 1})
 
+
 @app.get("/list/mods/")
-async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", tags = [],
-                   game:int = -1, allowed_ids = [], dependencies: bool = False, primary_sources = [], name: str = "",
-                   short_description: bool = False, description: bool = False, dates: bool = False, general: bool = True):
+async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", tags=[],
+                   game: int = -1, allowed_ids=[], dependencies: bool = False, primary_sources=[], name: str = "",
+                   short_description: bool = False, description: bool = False, dates: bool = False,
+                   general: bool = True):
     """
     Возвращает список модов к конкретной игре, которые есть на сервере. Не до конца провалидированные моды в список не попадают.
 
@@ -413,8 +427,10 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
 
     if page_size > 50 or page_size < 1:
         return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
-    elif (len(tags)+len(primary_sources)+len(allowed_ids)) > 30:
-        return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 30 elements in sum", "error_id": 2})
+    elif (len(tags) + len(primary_sources) + len(allowed_ids)) > 30:
+        return JSONResponse(status_code=413,
+                            content={"message": "the maximum complexity of filters is 30 elements in sum",
+                                     "error_id": 2})
 
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
@@ -451,7 +467,8 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
         query = query.filter(sdc.Mod.source.in_(primary_sources))
 
     if dependencies:
-        query = query.outerjoin(sdc.mods_dependencies, sdc.Mod.id == sdc.mods_dependencies.c.mod_id).filter(sdc.mods_dependencies.c.mod_id == None)
+        query = query.outerjoin(sdc.mods_dependencies, sdc.Mod.id == sdc.mods_dependencies.c.mod_id).filter(
+            sdc.mods_dependencies.c.mod_id == None)
 
     # Фильтрация по имени
     if len(name) > 0:
@@ -460,7 +477,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
 
     mods_count = query.count()
 
-    offset = page_size*page
+    offset = page_size * page
     mods = query.offset(offset).limit(page_size).all()
 
     session.close()
@@ -486,9 +503,10 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     # Вывод результатов
     return {"database_size": mods_count, "offset": offset, "results": output_mods}
 
+
 @app.get("/list/games/")
 async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNLOADS", name: str = "",
-                     type_app = [], genres = [], primary_sources = [],
+                     type_app=[], genres=[], primary_sources=[],
                      short_description: bool = False, description: bool = False, dates: bool = False,
                      statistics: bool = False):
     """
@@ -524,8 +542,10 @@ async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNL
 
     if page_size > 50 or page_size < 1:
         return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
-    elif (len(type_app)+len(genres)+len(primary_sources)) > 30:
-        return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 30 elements in sum", "error_id": 2})
+    elif (len(type_app) + len(genres) + len(primary_sources)) > 30:
+        return JSONResponse(status_code=413,
+                            content={"message": "the maximum complexity of filters is 30 elements in sum",
+                                     "error_id": 2})
 
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
@@ -549,7 +569,7 @@ async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNL
             print(type(genre))
             query = query.filter(sdc.Game.genres.any(id=genre))
 
-            #filtered_games = session.query(Game).filter(Game.genres.any(id=excluded_genre_id))
+            # filtered_games = session.query(Game).filter(Game.genres.any(id=excluded_genre_id))
 
     # Фильтрация по первоисточникам
     if len(primary_sources) > 0:
@@ -564,7 +584,7 @@ async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNL
         query = query.filter(sdc.Game.name.ilike(f'%{name}%'))
 
     mods_count = query.count()
-    offset = page_size*page
+    offset = page_size * page
     games = query.offset(offset).limit(page_size).all()
 
     output_games = []
@@ -606,7 +626,7 @@ async def list_tags(game_id: int, page_size: int = 10, page: int = 0):
     query = query.filter(sdc.ModTag.associated_games.any(sdc.Game.id == game_id))
 
     tags_count = query.count()
-    offset = page_size*page
+    offset = page_size * page
     tags = query.offset(offset).limit(page_size).all()
 
     session.close()
@@ -614,7 +634,7 @@ async def list_tags(game_id: int, page_size: int = 10, page: int = 0):
 
 
 @app.get("/list/tags/mods/{mods_ids_list}")
-async def list_tags_for_mods(mods_ids_list, tags = [], only_ids: bool = False):
+async def list_tags_for_mods(mods_ids_list, tags=[], only_ids: bool = False):
     """
     Возвращает ассоциации модов с тегами
 
@@ -627,8 +647,10 @@ async def list_tags_for_mods(mods_ids_list, tags = [], only_ids: bool = False):
     mods_ids_list = tool.str_to_list(mods_ids_list)
     tags = tool.str_to_list(tags)
 
-    if (len(mods_ids_list)+len(tags)) > 80:
-        return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 80 elements in sum", "error_id": 1})
+    if (len(mods_ids_list) + len(tags)) > 80:
+        return JSONResponse(status_code=413,
+                            content={"message": "the maximum complexity of filters is 80 elements in sum",
+                                     "error_id": 1})
 
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
@@ -671,7 +693,7 @@ async def list_genres(page_size: int = 10, page: int = 0):
     query = session.query(sdc.Genres)
 
     genres_count = query.count()
-    offset = page_size*page
+    offset = page_size * page
     genres = query.offset(offset).limit(page_size).all()
 
     session.close()
@@ -679,7 +701,7 @@ async def list_genres(page_size: int = 10, page: int = 0):
 
 
 @app.get("/list/genres/games/{games_ids_list}")
-async def list_genres_for_games(games_ids_list, genres = [], only_ids: bool = False):
+async def list_genres_for_games(games_ids_list, genres=[], only_ids: bool = False):
     """
     Возвращает ассоциации игр с жанрами
 
@@ -692,8 +714,10 @@ async def list_genres_for_games(games_ids_list, genres = [], only_ids: bool = Fa
     games_ids_list = tool.str_to_list(games_ids_list)
     genres = tool.str_to_list(genres)
 
-    if (len(games_ids_list)+len(genres)) > 80:
-        return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 80 elements in sum", "error_id": 2})
+    if (len(games_ids_list) + len(genres)) > 80:
+        return JSONResponse(status_code=413,
+                            content={"message": "the maximum complexity of filters is 80 elements in sum",
+                                     "error_id": 2})
 
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
@@ -717,7 +741,7 @@ async def list_genres_for_games(games_ids_list, genres = [], only_ids: bool = Fa
 
 
 @app.get("/list/resources_mods/{mods_list_id}")
-async def list_resources_mods(mods_list_id, page_size: int = 10, page: int = 0, types_resources = []):
+async def list_resources_mods(mods_list_id, page_size: int = 10, page: int = 0, types_resources=[]):
     """
     Возвращает список ресурсов у конкретного мода/списка модов.
 
@@ -733,8 +757,10 @@ async def list_resources_mods(mods_list_id, page_size: int = 10, page: int = 0, 
     types_resources = tool.str_to_list(types_resources)
     mods_list_id = tool.str_to_list(mods_list_id)
 
-    if len(types_resources)+len(mods_list_id) > 80:
-        return JSONResponse(status_code=413, content={"message": "the maximum complexity of filters is 80 elements in sum", "error_id": 2})
+    if len(types_resources) + len(mods_list_id) > 80:
+        return JSONResponse(status_code=413,
+                            content={"message": "the maximum complexity of filters is 80 elements in sum",
+                                     "error_id": 2})
 
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
@@ -748,7 +774,7 @@ async def list_resources_mods(mods_list_id, page_size: int = 10, page: int = 0, 
         query = query.filter(sdc.ResourceMod.type.in_(types_resources))
 
     resources_count = query.count()
-    offset = page_size*page
+    offset = page_size * page
     resources = query.offset(offset).limit(page_size).all()
 
     session.close()
@@ -845,7 +871,6 @@ async def mod_info(mod_id: int, dependencies: bool = False, short_description: b
     if game:
         query = query.add_columns(sdc.Mod.game)
 
-
     query = query.filter(sdc.Mod.id == mod_id)
     output["pre_result"] = query.first()
 
@@ -863,7 +888,7 @@ async def mod_info(mod_id: int, dependencies: bool = False, short_description: b
 
         output["game"] = {"id": output["pre_result"].game, "name": result.name}
 
-    #Закрытие сессии
+    # Закрытие сессии
     session.close()
 
     if output["pre_result"]:
@@ -980,8 +1005,9 @@ async def statistics_delay():
 
     return output
 
+
 @app.get("/statistics/hour")
-async def statistics_hour(select_date: date = None, start_hour:int = 0, end_hour:int = 23):
+async def statistics_hour(select_date: date = None, start_hour: int = 0, end_hour: int = 23):
     """
     Возвращает подробную статистику о запросах и работе сервера в конкретный день.
 
@@ -1012,7 +1038,8 @@ async def statistics_hour(select_date: date = None, start_hour:int = 0, end_hour
     Session = sessionmaker(bind=stc.engine)
     session = Session()
 
-    query = session.query(stc.StatisticsHour.date_time, stc.StatisticsHour.count, stc.StatisticsHour.type).order_by(asc(stc.StatisticsHour.date_time))
+    query = session.query(stc.StatisticsHour.date_time, stc.StatisticsHour.count, stc.StatisticsHour.type).order_by(
+        asc(stc.StatisticsHour.date_time))
     query = query.filter(stc.StatisticsHour.date_time >= start_date, stc.StatisticsHour.date_time <= end_date)
 
     output = []
@@ -1021,6 +1048,7 @@ async def statistics_hour(select_date: date = None, start_hour:int = 0, end_hour
 
     session.close()
     return output
+
 
 @app.get("/statistics/day")
 async def statistics_day(start_date: date = None, end_date: date = None):
@@ -1041,14 +1069,15 @@ async def statistics_day(start_date: date = None, end_date: date = None):
     if end_date is None:
         end_date = date.today()
     if start_date is None:
-        start_date = end_date-timedelta(days=6) #Т.к. у нас включительно, то именно 6 должно быть чтоб выходило 7
+        start_date = end_date - timedelta(days=6)  # Т.к. у нас включительно, то именно 6 должно быть чтоб выходило 7
     if start_date > end_date:
         return JSONResponse(status_code=409, content={"message": "conflicting request", "error_id": 3})
 
     Session = sessionmaker(bind=stc.engine)
     session = Session()
 
-    query = session.query(stc.StatisticsDay.date, stc.StatisticsDay.count, stc.StatisticsDay.type).order_by(asc(stc.StatisticsDay.date))
+    query = session.query(stc.StatisticsDay.date, stc.StatisticsDay.count, stc.StatisticsDay.type).order_by(
+        asc(stc.StatisticsDay.date))
     query = query.filter(stc.StatisticsDay.date >= start_date, stc.StatisticsDay.date <= end_date)
 
     output = []
@@ -1057,6 +1086,7 @@ async def statistics_day(start_date: date = None, end_date: date = None):
 
     session.close()
     return output
+
 
 @app.get("/statistics/info/all")
 async def statistics_info():
@@ -1113,19 +1143,17 @@ async def statistics_type_map(request: Request):
     # Например, вы можете вернуть список языковых кодов в формате JSON
     return {"language": select_language, "result": stc.cache_types_data(select_language)}
 
-@app.get("/test/access")
-async def test_access(request: Request):
+
+@app.post("/account/")
+async def test_access(request: Request, token: str, dop: str = None):
     """
     Тестовая функция доступа для общения между микросервисами
     """
-    #return 404
-    import pprint
-    pprint.pprint(request.__dict__)
-    return {
-        "user ip": request.client.host,
-        "user port": request.client.port,
-        "requested url(target server)": request.url._url
-    }
+    if not await access(request=request, user_token=token, real_token="ааа", func_name="test_access"):
+        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    return "Access is allowed."
+
 
 def init():
     steam = SteamCMD("steam_client")
@@ -1134,6 +1162,8 @@ def init():
         print("Установка клиента Steam завершена")
     except SteamCMDException:
         print("Steam клиент уже установлен, попробуйте использовать параметр --force для принудительной установки")
+
+
 if threads.get("start", None) == None:
     stc.update("start")
     threads["start"] = threading.Thread(target=init, name="start")
@@ -1174,4 +1204,3 @@ if threads.get("start", None) == None:
 
     threads["todo"] = threading.Thread(target=todo_exe, name="todo")
     threads["todo"].start()
-
