@@ -4,6 +4,7 @@ import tool
 import shutil
 import threading
 import statistics
+import gunicorn_config
 from sql_access_errors import access
 import steam_tools as stt
 import sql_data_client as sdc
@@ -1129,14 +1130,17 @@ async def statistics_type_map(request: Request):
     """
     stc.update("/statistics/info/type_map/")
 
-    languages = [lang.split(";")[0].strip() for lang in request.headers.get("Accept-Language").split(",")]
+    try:
+        languages = [lang.split(";")[0].strip() for lang in request.headers.get("Accept-Language").split(",")]
 
-    select_language = languages[0] if languages else "ru"
-    for language in languages:
-        if language in stc.allow_language_type_map:
-            select_language = language
-            break
-    if select_language is None:
+        select_language = languages[0] if languages else "ru"
+        for language in languages:
+            if language in stc.allow_language_type_map:
+                select_language = language
+                break
+        if select_language is None:
+            select_language = "ru"
+    except:
         select_language = "ru"
 
     # Ваш код для обработки языковых кодов
@@ -1144,12 +1148,12 @@ async def statistics_type_map(request: Request):
     return {"language": select_language, "result": stc.cache_types_data(select_language)}
 
 
-@app.post("/account/")
-async def test_access(request: Request, token: str, dop: str = None):
+@app.post("/account/test/")
+async def test_access(request: Request, token: str):
     """
     Тестовая функция доступа для общения между микросервисами
     """
-    if not await access(request=request, user_token=token, real_token="ааа", func_name="test_access"):
+    if not await access(request=request, user_token=token, real_token=gunicorn_config.token_test, func_name="test_access"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     return "Access is allowed."
