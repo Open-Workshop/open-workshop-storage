@@ -221,7 +221,7 @@ def set_game(session, mod_data):
                 mods_downloads=0,
                 mods_count=tool.get_mods_count(session=session, game_id=mod_data["consumer_app_id"]),
                 creation_date=datetime.now(),
-                source='steam',
+                source='steam'
             )
 
             session.execute(insert_statement)
