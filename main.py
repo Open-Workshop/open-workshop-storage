@@ -1224,8 +1224,8 @@ async def account_add_resource(request: Request, token: str, resource_type_name:
     """
 
     """
-    #if not await access(request=request, user_token=token, real_token=config.token_test):
-    #    return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+    if not await access(request=request, user_token=token, real_token=config.token_test):
+        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     insert_statement = insert(sdc.ResourceMod).values(
         type=resource_type_name,
@@ -1326,7 +1326,7 @@ async def account_edit_tag(request: Request, token: str, tag_id: int, tag_name: 
 
 @app.post("/account/edit/resource")
 async def account_edit_resource(request: Request, token: str, resource_id: int, resource_type: str = None,
-                           resource_url: str = None, resource_owner_id: str = None):
+                                resource_url: str = None, resource_owner_id: str = None):
     """
 
     """
@@ -1380,8 +1380,11 @@ async def account_delete_genre(request: Request, token: str, genre_id: int):
 
     delete_game = delete(sdc.Genres).where(sdc.Genres.id == genre_id)
 
+    delete_genres_association = sdc.game_genres.delete().where(sdc.game_genres.c.genre_id == genre_id)
+
     # Выполнение операции DELETE
     session.execute(delete_game)
+    session.execute(delete_genres_association)
     session.commit()
     return JSONResponse(status_code=202, content="Complite")
 
@@ -1396,8 +1399,13 @@ async def account_delete_tag(request: Request, token: str, tag_id: int):
 
     delete_game = delete(sdc.ModTag).where(sdc.ModTag.id == tag_id)
 
+    delete_mods_tags_association = sdc.mods_tags.delete().where(sdc.mods_tags.c.tag_id == tag_id)
+    delete_game_tags_association = sdc.allowed_mods_tags.delete().where(sdc.allowed_mods_tags.c.tag_id == tag_id)
+
     # Выполнение операции DELETE
     session.execute(delete_game)
+    session.execute(delete_mods_tags_association)
+    session.execute(delete_game_tags_association)
     session.commit()
     return JSONResponse(status_code=202, content="Complite")
 
@@ -1470,6 +1478,62 @@ async def account_association_game_tag(request: Request, token: str, game_id: in
 
         # Выполнение операции DELETE
         session.execute(delete_tags_association)
+        session.commit()
+        return JSONResponse(status_code=202, content="Complite")
+
+
+@app.post("/account/association/mod/tag")
+async def account_association_mod_tag(request: Request, token: str, mod_id: int, mode: bool, tag_id: int):
+    """
+    `mode = True` - добавить ассоциацию
+    `mode = False` - удалить ассоциацию
+    """
+    if not await access(request=request, user_token=token, real_token=config.token_test):
+        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    if mode:
+        output = session.query(sdc.mods_tags).filter_by(mod_id=mod_id, tag_id=tag_id).first()
+        if output is None:
+            insert_statement = insert(sdc.mods_tags).values(mod_id=mod_id, tag_id=tag_id)
+            session.execute(insert_statement)
+            session.commit()
+            return JSONResponse(status_code=202, content="Complite")
+        else:
+            return JSONResponse(status_code=409, content="The association is already present")
+    else:
+        delete_tags_association = sdc.mods_tags.delete().where(sdc.mods_tags.c.mod_id == mod_id,
+                                                               sdc.mods_tags.c.tag_id == tag_id)
+
+        # Выполнение операции DELETE
+        session.execute(delete_tags_association)
+        session.commit()
+        return JSONResponse(status_code=202, content="Complite")
+
+
+@app.post("/account/association/mod/dependencie")
+async def account_association_mod_dependencie(request: Request, token: str, mod_id: int, mode: bool, dependencie: int):
+    """
+    `mode = True` - добавить ассоциацию
+    `mode = False` - удалить ассоциацию
+    """
+    if not await access(request=request, user_token=token, real_token=config.token_test):
+        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    if mode:
+        output = session.query(sdc.mods_dependencies).filter_by(mod_id=mod_id, dependence=dependencie).first()
+        if output is None:
+            insert_statement = insert(sdc.mods_dependencies).values(mod_id=mod_id, dependence=dependencie)
+            session.execute(insert_statement)
+            session.commit()
+            return JSONResponse(status_code=202, content="Complite")
+        else:
+            return JSONResponse(status_code=409, content="The association is already present")
+    else:
+        delete_dependence_association = sdc.mods_dependencies.delete().where(sdc.mods_dependencies.c.mod_id == mod_id,
+                                                                             sdc.mods_dependencies.c.dependence == dependencie)
+
+        # Выполнение операции DELETE
+        session.execute(delete_dependence_association)
         session.commit()
         return JSONResponse(status_code=202, content="Complite")
 
