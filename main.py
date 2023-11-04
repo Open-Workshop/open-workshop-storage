@@ -4,11 +4,11 @@ import tool
 import shutil
 import threading
 import statistics
-import gunicorn_config
-from sql_access_errors import access
 import steam_tools as stt
+import gunicorn_config as config
 import sql_data_client as sdc
 import sql_statistics_client as stc
+from sql_access_errors import access
 from fastapi import FastAPI, Request
 from sqlalchemy import delete, insert, func, asc
 from sqlalchemy.orm import sessionmaker
@@ -1153,10 +1153,90 @@ async def test_access(request: Request, token: str):
     """
     Тестовая функция доступа для общения между микросервисами
     """
-    if not await access(request=request, user_token=token, real_token=gunicorn_config.token_test, func_name="test_access"):
+    if not await access(request=request, user_token=token, real_token=config.token_test, func_name="test_access"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     return "Access is allowed."
+
+
+@app.post("/account/add/game")
+async def account_add_game(request: Request, token: str, game_name: str, game_short_desc: str, game_desc: str, game_type: str = "game", game_logo: str = ""):
+    """
+
+    """
+    if not await access(request=request, user_token=token, real_token=config.token_test):
+        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    insert_statement = insert(sdc.Game).values(
+        name=game_name,
+        type=game_type,
+        logo=game_logo,
+        short_description=game_short_desc,
+        description=game_desc,
+        mods_downloads=0,
+        mods_count=0,
+        creation_date=datetime.now(),
+        source='local'
+    ).returning(sdc.Game.id)
+
+    result = session.execute(insert_statement)
+    id = result.fetchone()[0]  # Получаем значение `id` созданного элемента
+
+    session.commit()
+    session.close()
+
+    return JSONResponse(status_code=202, content=id) # Возвращаем значение `id`
+
+
+@app.post("/account/edit/game")
+async def account_edit_game(request: Request, token: str, game_id: int, game_name: str = None,
+                            game_short_desc: str = None, game_desc: str = None, game_type: str = None,
+                            game_logo: str = None, game_source: str = None):
+    """
+
+    """
+    if not await access(request=request, user_token=token, real_token=config.token_test):
+        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    # Подготавливаем данные
+    data_edit = {}
+    if game_name:
+        data_edit["name"] = game_name
+    if game_short_desc:
+        data_edit["short_description"] = game_short_desc
+    if game_desc:
+        data_edit["description"] = game_desc
+    if game_type:
+        data_edit["type"] = game_type
+    if game_logo:
+        data_edit["logo"] = game_logo
+    if game_source:
+        data_edit["source"] = game_source
+
+    if len(data_edit) <= 0:
+        return JSONResponse(status_code=418, content="The request is empty")
+
+    # Меняем данные в БД
+    game = session.query(sdc.Game).filter_by(id=game_id)
+    game.update(data_edit)
+    session.commit()
+    return JSONResponse(status_code=202, content="Complite")
+
+
+@app.post("/account/delete/game")
+async def account_delete_game(request: Request, token: str, game_id: int):
+    """
+
+    """
+    if not await access(request=request, user_token=token, real_token=config.token_test):
+        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    delete_game = delete(sdc.Game).where(sdc.Game.id == game_id)
+
+    # Выполнение операции DELETE
+    session.execute(delete_game)
+    session.commit()
+    return JSONResponse(status_code=202, content="Complite")
 
 
 def init():

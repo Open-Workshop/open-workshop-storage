@@ -88,6 +88,8 @@ async def check_access(request: Request, user_token: str, real_token: str):
     try:
         if request.client.host != "127.0.0.1" or not request.url._url.startswith("http://127.0.0.1:8000/account/"):
             return "user is incorrect"
+        elif request.headers:
+            return "user substitution attempt"
     except:
         return "user error"
 
