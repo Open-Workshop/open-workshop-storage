@@ -47,6 +47,43 @@ def zipping(game_id: int, mod_id: int, target_size: int) -> bool: \
 
         return True
 
+async def calculate_uncompressed_size(file_path):
+    try:
+        with zipfile.ZipFile(file_path) as zip_file:
+            total_size = sum(file.file_size for file in zip_file.infolist())
+            return total_size
+    except Exception as e:
+        return str(e)
+
+
+async def zip_standart(archive_path: str):
+    try:
+        # Проверяем, является ли архив архивом ZIP_BZIP2
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            compression_type = archive.compression
+            if compression_type == zipfile.ZIP_BZIP2:
+                print("Архив уже заархивирован по стандарту ZIP_BZIP2")
+                return archive_path
+            else:
+                print("Архив не заархивирован по стандарту ZIP_BZIP2")
+
+                # Приводим архив к стандарту ZIP_BZIP2
+                new_archive_path = archive_path.replace(".zip", "_new.zip")
+                with zipfile.ZipFile(new_archive_path, "w", compression=zipfile.ZIP_BZIP2) as new_archive:
+                    for file_name in archive.namelist():
+                        with archive.open(file_name) as file:
+                            new_archive.writestr(file_name, file.read())
+
+        os.remove(archive_path)
+
+        print("Архив успешно приведен к стандарту ZIP_BZIP2")
+        return new_archive_path
+    except:
+        os.remove(archive_path)
+        print("При проверке стандарта архива произошла непредвиденная ошибка!")
+        return ""
+
+
 
 def sort_mods(sort_by: str):
     match sort_by:

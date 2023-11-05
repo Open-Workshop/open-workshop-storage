@@ -8,8 +8,9 @@ import steam_tools as stt
 import gunicorn_config as config
 import sql_data_client as sdc
 import sql_statistics_client as stc
+from pathlib import Path
 from sql_access_errors import access
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile
 from sqlalchemy import delete, insert, func, asc
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql.expression import desc
@@ -1217,6 +1218,8 @@ async def account_add_tag(request: Request, token: str, tag_name: str):
     session.commit()
     session.close()
 
+    return JSONResponse(status_code=202, content=id)  # Возвращаем значение `id`
+
 
 @app.post("/account/add/resource")
 async def account_add_resource(request: Request, token: str, resource_type_name: str, resource_url_name: str,
@@ -1241,6 +1244,66 @@ async def account_add_resource(request: Request, token: str, resource_type_name:
     session.close()
 
     return JSONResponse(status_code=202, content=id)  # Возвращаем значение `id`
+
+
+@app.post("/account/add/mod")
+async def account_add_mod(request: Request, token: str, mod_name: str, mod_short_description: str,
+                          mod_description: str, mod_source: str, mod_game: int, mod_file: UploadFile):
+    """
+    Ограничение на архив - 800МБ. Ограничения на не сжатый размер мода нет.
+    """
+    if not await access(request=request, user_token=token, real_token=config.token_test):
+        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    if mod_file.size >= 838860800:
+        return JSONResponse(status_code=413, content="The file is too large.")
+    elif not mod_file.filename.endswith(".zip"):
+        return JSONResponse(status_code=400, content="Only ZIP archives are accepted.")
+
+
+    insert_statement = insert(sdc.Mod).values(
+        name=mod_name,
+        short_description=mod_short_description,
+        description=mod_description,
+
+        condition=1,
+
+        date_creation=datetime.now(),
+        date_update=datetime.now(),
+        date_request=datetime.now(),
+
+        source=mod_source,
+        downloads=0,
+
+        game=mod_game
+    ).returning(sdc.Mod.id)
+
+    result = session.execute(insert_statement)
+    id = result.fetchone()[0]  # Получаем значение `id` созданного элемента
+
+    session.commit()
+
+    file_path = f"users_files_processing/{id}.zip"
+    with open(file_path, "wb") as f:
+        f.write(await mod_file.read())
+    mod_size = await tool.calculate_uncompressed_size(file_path=file_path)
+
+    archive_standart = await tool.zip_standart(archive_path=file_path)
+    if len(archive_standart) <= 0:
+        delete_statement = delete(sdc.Mod).where(sdc.Mod.id == id)
+        session.execute(delete_statement)
+        session.commit()
+
+        return JSONResponse(status_code=500, content="An unknown error occurred while checking the archive standard.")
+
+    Path(f"mods/{mod_game}").mkdir(parents=True, exist_ok=True)
+    os.replace(src=archive_standart, dst=f"mods/{mod_game}/{id}.zip")
+
+    session.query(sdc.Mod).filter_by(id=id).update({'condition': 0, 'size': mod_size})
+    session.query(sdc.Game).filter_by(id=mod_game).update({'mods_count': tool.get_mods_count(session=session, game_id=mod_game)})
+    session.commit()
+
+    return JSONResponse(status_code=201, content=id)  # Возвращаем значение `id`
 
 
 @app.post("/account/edit/game")
@@ -1418,11 +1481,43 @@ async def account_delete_resource(request: Request, token: str, resource_id: int
     if not await access(request=request, user_token=token, real_token=config.token_test):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
-    delete_game = delete(sdc.ResourceMod).where(sdc.ResourceMod.id == resource_id)
+    delete_resource = delete(sdc.ResourceMod).where(sdc.ResourceMod.id == resource_id)
+
+    # Выполнение операции DELETE
+    session.execute(delete_resource)
+    session.commit()
+    return JSONResponse(status_code=202, content="Complite")
+
+
+@app.post("/account/delete/mod")
+async def account_delete_resource(request: Request, token: str, mod_id: int):
+    """
+
+    """
+    if not await access(request=request, user_token=token, real_token=config.token_test):
+        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    query_game = session.query(sdc.Mod.game).filter(sdc.Mod.id == mod_id).first().game
+    mod_path = f"mods/{query_game}/{mod_id}.zip"
+
+    delete_game = delete(sdc.Mod).where(sdc.Mod.id == mod_id)
+    delete_dependence_association = sdc.mods_dependencies.delete().where(sdc.mods_dependencies.c.mod_id == mod_id)
+    delete_tags_association = sdc.mods_tags.delete().where(sdc.mods_tags.c.mod_id == mod_id)
+    delete_resource = delete(sdc.ResourceMod).where(sdc.ResourceMod.owner_id == mod_id)
+
 
     # Выполнение операции DELETE
     session.execute(delete_game)
+    session.execute(delete_dependence_association)
+    session.execute(delete_tags_association)
+    session.execute(delete_resource)
     session.commit()
+
+    os.remove(mod_path)
+
+    session.query(sdc.Game).filter_by(id=query_game).update({'mods_count': tool.get_mods_count(session=session, game_id=query_game)})
+    session.commit()
+
     return JSONResponse(status_code=202, content="Complite")
 
 
