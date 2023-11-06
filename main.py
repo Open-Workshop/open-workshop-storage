@@ -5,7 +5,7 @@ import shutil
 import threading
 import statistics
 import steam_tools as stt
-import gunicorn_config as config
+import ow_config as config
 import sql_data_client as sdc
 import sql_statistics_client as stc
 from pathlib import Path
@@ -1155,7 +1155,7 @@ async def account_add_game(request: Request, token: str, game_name: str, game_sh
     """
 
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_add_game):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     insert_statement = insert(sdc.Game).values(
@@ -1184,7 +1184,7 @@ async def account_add_genre(request: Request, token: str, genre_name: str):
     """
 
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_add_genre):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     insert_statement = insert(sdc.Genres).values(
@@ -1205,7 +1205,7 @@ async def account_add_tag(request: Request, token: str, tag_name: str):
     """
 
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_add_tag):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     insert_statement = insert(sdc.ModTag).values(
@@ -1227,7 +1227,7 @@ async def account_add_resource(request: Request, token: str, resource_type_name:
     """
 
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_add_resource):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     insert_statement = insert(sdc.ResourceMod).values(
@@ -1252,7 +1252,7 @@ async def account_add_mod(request: Request, token: str, mod_name: str, mod_short
     """
     Ограничение на архив - 800МБ. Ограничения на не сжатый размер мода нет.
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_add_mod):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     if mod_file.size >= 838860800:
@@ -1313,7 +1313,7 @@ async def account_edit_game(request: Request, token: str, game_id: int, game_nam
     """
 
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_edit_game):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     game = session.query(sdc.Game).filter_by(id=game_id)
@@ -1349,7 +1349,7 @@ async def account_edit_genre(request: Request, token: str, genre_id: int, genre_
     """
 
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_edit_genre):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     game = session.query(sdc.Genres).filter_by(id=genre_id)
@@ -1376,7 +1376,7 @@ async def account_edit_tag(request: Request, token: str, tag_id: int, tag_name: 
     """
 
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_edit_tag):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     tag = session.query(sdc.ModTag).filter_by(id=tag_id)
@@ -1403,7 +1403,7 @@ async def account_edit_resource(request: Request, token: str, resource_id: int, 
     """
 
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_edit_resource):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     resource = session.query(sdc.ResourceMod).filter_by(id=resource_id)
@@ -1437,7 +1437,7 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
     """
 
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_edit_mod):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     mod = session.query(sdc.Mod).filter_by(id=mod_id)
@@ -1505,7 +1505,7 @@ async def account_delete_game(request: Request, token: str, game_id: int):
     """
 
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_delete_game):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     delete_game = delete(sdc.Game).where(sdc.Game.id == game_id)
@@ -1521,7 +1521,7 @@ async def account_delete_genre(request: Request, token: str, genre_id: int):
     """
 
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_delete_genre):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     delete_game = delete(sdc.Genres).where(sdc.Genres.id == genre_id)
@@ -1540,7 +1540,7 @@ async def account_delete_tag(request: Request, token: str, tag_id: int):
     """
 
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_delete_tag):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     delete_game = delete(sdc.ModTag).where(sdc.ModTag.id == tag_id)
@@ -1561,7 +1561,7 @@ async def account_delete_resource(request: Request, token: str, resource_id: int
     """
 
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_delete_resource):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     delete_resource = delete(sdc.ResourceMod).where(sdc.ResourceMod.id == resource_id)
@@ -1573,11 +1573,11 @@ async def account_delete_resource(request: Request, token: str, resource_id: int
 
 
 @app.post("/account/delete/mod")
-async def account_delete_resource(request: Request, token: str, mod_id: int):
+async def account_delete_mod(request: Request, token: str, mod_id: int):
     """
 
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_delete_mod):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     query_game = session.query(sdc.Mod.game).filter(sdc.Mod.id == mod_id).first().game
@@ -1610,7 +1610,7 @@ async def account_association_game_genre(request: Request, token: str, game_id: 
     `mode = True` - добавить ассоциацию
     `mode = False` - удалить ассоциацию
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_association_game_genre):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     if mode:
@@ -1638,7 +1638,7 @@ async def account_association_game_tag(request: Request, token: str, game_id: in
     `mode = True` - добавить ассоциацию
     `mode = False` - удалить ассоциацию
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_association_game_tag):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     if mode:
@@ -1666,7 +1666,7 @@ async def account_association_mod_tag(request: Request, token: str, mod_id: int,
     `mode = True` - добавить ассоциацию
     `mode = False` - удалить ассоциацию
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_association_mod_tag):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     if mode:
@@ -1694,7 +1694,7 @@ async def account_association_mod_dependencie(request: Request, token: str, mod_
     `mode = True` - добавить ассоциацию
     `mode = False` - удалить ассоциацию
     """
-    if not await access(request=request, user_token=token, real_token=config.token_test):
+    if not await access(request=request, user_token=token, real_token=config.token_association_mod_dependencie):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     if mode:
@@ -1745,7 +1745,7 @@ if threads.get("start", None) == None:
                 print(f'Обнаружен не провалидированный архив! ({mod.id})')
                 os.remove(f'mods/{mod.associated_games[0].id}/{mod.id}.zip')
         except:
-            print(f"Ошибка удаления папки/архива битого мода с ID - {mod.id}")
+            print(f"Ошибка удаления папки/архива битого мода с ID - {mod.id}", flush=True)
 
         # Если загрузка окончена ошибкой
         delete_statement = delete(sdc.Mod).where(sdc.Mod.id == int(mod.id))
@@ -1761,7 +1761,12 @@ if threads.get("start", None) == None:
     # Удаляем всю папку т.к. там только поврежденные моды
     if os.path.isdir("steamapps/workshop"):
         shutil.rmtree("steamapps/workshop")
-        print("Папка модов Steam удалена")
+        print("Папка модов Steam удалена", flush=True)
+
+    if os.path.isdir("users_files_processing"):
+        shutil.rmtree("users_files_processing")
+        Path("users_files_processing").mkdir(parents=True, exist_ok=True)
+        print("Папка пользовательских не обработанных модов удалена", flush=True)
 
     threads["todo"] = threading.Thread(target=todo_exe, name="todo")
     threads["todo"].start()
