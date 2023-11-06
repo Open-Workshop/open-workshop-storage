@@ -62,6 +62,7 @@ class Mod(base): # Таблица "моды"
     size = Column(Integer)
 
     condition = Column(Integer) #0 - загружен, 1 - загружается
+    public = Column(Integer) #0 - публичен, 1 - публичен, не встречается в каталоге, не индексируется, 2 - доступен с предоставлением токена
 
     date_creation = Column(DateTime)
     date_update = Column(DateTime)

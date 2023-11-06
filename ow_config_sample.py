@@ -1,6 +1,14 @@
 # Хеши токенов
 
+
+## Доступ к не публичным модам
+
 token_info_mod = ""
+token_download_mod = ""
+token_steam_download_mod = ""
+
+
+## Изменение БД
 
 token_add_game = ""
 token_add_genre = ""

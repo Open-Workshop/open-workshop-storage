@@ -83,7 +83,7 @@ async def main():
 
 
 @app.get("/download/steam/{mod_id}")
-async def mod_dowloader_request(mod_id: int):
+async def mod_dowloader_request(request: Request, mod_id: int, token: str = None):
     """
     Нужно передать `ID` мода **Steam**.
     Если у сервера уже есть этот мод - он его отправит как `ZIP` архив со сжатием `ZIP_BZIP2`.
@@ -132,6 +132,10 @@ async def mod_dowloader_request(mod_id: int):
     updating = False
     if (rows != None and len(rows) > 0) or os.path.isfile(zip_path) or os.path.isdir(
             real_path):  # Проверяем есть ли запись на сервере в каком-либо виде
+        if rows != None and len(rows) > 0 and rows[0].public >= 2:
+            if not await access(request=request, user_token=token, real_token=config.token_steam_download_mod):
+                return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
         if (rows != None and len(rows) > 0) and os.path.isfile(zip_path):  # Если это ZIP архив - отправляем
             mod_update = datetime.fromtimestamp(mod["time_updated"])
             db_datetime = rows[0].date_update
@@ -200,6 +204,7 @@ async def mod_dowloader_request(mod_id: int):
             description=mod['description'],
             size=mod['file_size'],
             condition=3,
+            public=0,
             date_creation=datetime.fromtimestamp(mod['time_created']),
             date_update=datetime.fromtimestamp(mod['time_updated']),
             date_request=datetime.now(),
@@ -279,7 +284,7 @@ def mod_dowload(mod_data: dict, wait_time):
 
 
 @app.get("/download/{mod_id}")
-async def download(mod_id: int):
+async def download(request: Request, mod_id: int, token: str = None):
     """
     Нужно передать `ID` мода.
     Если у сервера уже есть этот мод - он его отправит как `ZIP` архив со сжатием `ZIP_BZIP2`.
@@ -303,6 +308,10 @@ async def download(mod_id: int):
             stc.create_processing(type="download_local_error", time_start=wait_time)
             session.close()
             return JSONResponse(status_code=102, content={"message": "this mod is still loading", "error_id": 3})
+
+        if rows[0].public >= 2:
+            if not await access(request=request, user_token=token, real_token=config.token_download_mod):
+                return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
         output = stt.checker(rows=rows, steam_path=path, mod_id=mod_id, session=session)
         if output is not None:
@@ -450,6 +459,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
 
     query = query.order_by(tool.sort_mods(sort))
     query = query.filter(sdc.Mod.condition == 0)
+    query = query.filter(sdc.Mod.public == 0)
 
     # Фильтрация по тегам
     if len(tags) > 0:
@@ -835,7 +845,7 @@ async def game_info(game_id: int, short_description: bool = False, description: 
 
 
 @app.get("/info/mod/{mod_id}")
-async def mod_info(mod_id: int, dependencies: bool = False, short_description: bool = False, description: bool = False,
+async def mod_info(request: Request, mod_id: int, token: str = None, dependencies: bool = False, short_description: bool = False, description: bool = False,
                    dates: bool = False, general: bool = True, game: bool = False):
     """
     Возвращает информацию о конкретной игре.
@@ -873,8 +883,14 @@ async def mod_info(mod_id: int, dependencies: bool = False, short_description: b
     if game:
         query = query.add_columns(sdc.Mod.game)
 
+    query = query.add_columns(sdc.Mod.public)
     query = query.filter(sdc.Mod.id == mod_id)
     output["pre_result"] = query.first()
+
+    if output["pre_result"].public >= 2:
+        if not await access(request=request, user_token=token, real_token=config.token_info_mod):
+            session.close()
+            return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     if dependencies:
         query = session.query(sdc.mods_dependencies.c.dependence)
@@ -907,6 +923,7 @@ async def mod_info(mod_id: int, dependencies: bool = False, short_description: b
             output["result"]["size"] = output["pre_result"].size
             output["result"]["source"] = output["pre_result"].source
             output["result"]["downloads"] = output["pre_result"].downloads
+            output["result"]["public"] = output["pre_result"].public
         if game:
             output["result"]["game"] = output["game"]
             del output["game"]
@@ -1248,7 +1265,7 @@ async def account_add_resource(request: Request, token: str, resource_type_name:
 
 @app.post("/account/add/mod")
 async def account_add_mod(request: Request, token: str, mod_name: str, mod_short_description: str,
-                          mod_description: str, mod_source: str, mod_game: int, mod_file: UploadFile):
+                          mod_description: str, mod_source: str, mod_game: int, mod_public: int, mod_file: UploadFile):
     """
     Ограничение на архив - 800МБ. Ограничения на не сжатый размер мода нет.
     """
@@ -1260,6 +1277,8 @@ async def account_add_mod(request: Request, token: str, mod_name: str, mod_short
     elif not mod_file.filename.endswith(".zip"):
         return JSONResponse(status_code=400, content="Only ZIP archives are accepted.")
 
+    if mod_public not in [0, 1, 2]:
+        mod_public = 0
 
     insert_statement = insert(sdc.Mod).values(
         name=mod_name,
@@ -1267,6 +1286,7 @@ async def account_add_mod(request: Request, token: str, mod_name: str, mod_short
         description=mod_description,
 
         condition=1,
+        public=mod_public,
 
         date_creation=datetime.now(),
         date_update=datetime.now(),
@@ -1433,7 +1453,7 @@ async def account_edit_resource(request: Request, token: str, resource_id: int, 
 @app.post("/account/edit/mod")
 async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: str = None,
                            mod_short_description: str = None, mod_description: str = None, mod_source: str = None,
-                           mod_game: int = None, mod_file: UploadFile = None):
+                           mod_game: int = None, mod_public: int = None, mod_file: UploadFile = None):
     """
 
     """
@@ -1461,6 +1481,8 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
         data_edit["description"] = mod_description
     if mod_source:
         data_edit["source"] = mod_source
+    if mod_public and mod_public in [0, 1, 2]:
+        data_edit["public"] = mod_public
     if mod_game:
         data_edit["game"] = mod_game
         mod_game_before = mod_data.game
