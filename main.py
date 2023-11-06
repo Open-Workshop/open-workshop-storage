@@ -1314,7 +1314,11 @@ async def account_edit_game(request: Request, token: str, game_id: int, game_nam
 
     """
     if not await access(request=request, user_token=token, real_token=config.token_test):
-        return JSONResponse(status_code=204, content="Access denied. This case will be reported.")
+        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    game = session.query(sdc.Game).filter_by(id=game_id)
+    if not game.first():
+        return JSONResponse(status_code=404, content="The element does not exist.")
 
     # Подготавливаем данные
     data_edit = {}
@@ -1335,7 +1339,6 @@ async def account_edit_game(request: Request, token: str, game_id: int, game_nam
         return JSONResponse(status_code=418, content="The request is empty")
 
     # Меняем данные в БД
-    game = session.query(sdc.Game).filter_by(id=game_id)
     game.update(data_edit)
     session.commit()
     return JSONResponse(status_code=202, content="Complite")
@@ -1347,7 +1350,11 @@ async def account_edit_genre(request: Request, token: str, genre_id: int, genre_
 
     """
     if not await access(request=request, user_token=token, real_token=config.token_test):
-        return JSONResponse(status_code=204, content="Access denied. This case will be reported.")
+        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    game = session.query(sdc.Genres).filter_by(id=genre_id)
+    if game.first():
+        return JSONResponse(status_code=404, content="The element does not exist.")
 
     # Подготавливаем данные
     data_edit = {}
@@ -1370,7 +1377,11 @@ async def account_edit_tag(request: Request, token: str, tag_id: int, tag_name: 
 
     """
     if not await access(request=request, user_token=token, real_token=config.token_test):
-        return JSONResponse(status_code=204, content="Access denied. This case will be reported.")
+        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    tag = session.query(sdc.ModTag).filter_by(id=tag_id)
+    if not tag.first():
+        return JSONResponse(status_code=404, content="The element does not exist.")
 
     # Подготавливаем данные
     data_edit = {}
@@ -1381,8 +1392,7 @@ async def account_edit_tag(request: Request, token: str, tag_id: int, tag_name: 
         return JSONResponse(status_code=418, content="The request is empty")
 
     # Меняем данные в БД
-    game = session.query(sdc.ModTag).filter_by(id=tag_id)
-    game.update(data_edit)
+    tag.update(data_edit)
     session.commit()
     return JSONResponse(status_code=202, content="Complite")
 
@@ -1394,7 +1404,11 @@ async def account_edit_resource(request: Request, token: str, resource_id: int, 
 
     """
     if not await access(request=request, user_token=token, real_token=config.token_test):
-        return JSONResponse(status_code=204, content="Access denied. This case will be reported.")
+        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    resource = session.query(sdc.ResourceMod).filter_by(id=resource_id)
+    if not resource.first():
+        return JSONResponse(status_code=404, content="The element does not exist.")
 
     # Подготавливаем данные
     data_edit = {}
@@ -1411,9 +1425,78 @@ async def account_edit_resource(request: Request, token: str, resource_id: int, 
     data_edit["date_event"] = datetime.now()
 
     # Меняем данные в БД
-    game = session.query(sdc.ResourceMod).filter_by(id=resource_id)
-    game.update(data_edit)
+    resource.update(data_edit)
     session.commit()
+    return JSONResponse(status_code=202, content="Complite")
+
+
+@app.post("/account/edit/mod")
+async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: str = None,
+                           mod_short_description: str = None, mod_description: str = None, mod_source: str = None,
+                           mod_game: int = None, mod_file: UploadFile = None):
+    """
+
+    """
+    if not await access(request=request, user_token=token, real_token=config.token_test):
+        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    mod = session.query(sdc.Mod).filter_by(id=mod_id)
+    mod_data = mod.first()
+    if not mod_data:
+        return JSONResponse(status_code=404, content="The element does not exist.")
+
+    if mod_file:
+        if mod_file.size >= 838860800:
+            return JSONResponse(status_code=413, content="The file is too large.")
+        elif not mod_file.filename.endswith(".zip"):
+            return JSONResponse(status_code=400, content="Only ZIP archives are accepted.")
+
+    # Подготавливаем данные
+    data_edit = {}
+    if mod_name:
+        data_edit["name"] = mod_name
+    if mod_short_description:
+        data_edit["short_description"] = mod_short_description
+    if mod_description:
+        data_edit["description"] = mod_description
+    if mod_source:
+        data_edit["source"] = mod_source
+    if mod_game:
+        data_edit["game"] = mod_game
+        mod_game_before = mod_data.game
+
+
+    if mod_file:
+        file_path = f"users_files_processing/{mod_id}.zip"
+        with open(file_path, "wb") as f:
+            f.write(await mod_file.read())
+
+        archive_standart = await tool.zip_standart(archive_path=file_path)
+        if len(archive_standart) <= 0:
+            return JSONResponse(status_code=500, content="An unknown error occurred while checking the archive standard.")
+        else:
+            data_edit["date_update"] = datetime.now()
+            data_edit["size"] = await tool.calculate_uncompressed_size(file_path=archive_standart)
+
+        Path(f"mods/{mod_game}").mkdir(parents=True, exist_ok=True)
+        os.replace(src=archive_standart, dst=f"mods/{mod_game}/{mod_id}.zip")
+
+
+
+    if len(data_edit) <= 0:
+        return JSONResponse(status_code=418, content="The request is empty")
+
+    data_edit["date_request"] = datetime.now()
+
+    # Меняем данные в БД
+    mod.update(data_edit)
+    session.commit()
+
+    if mod_game:
+        session.query(sdc.Game).filter_by(id=mod_game_before).update({'mods_count': tool.get_mods_count(session=session, game_id=mod_game_before)})
+        session.query(sdc.Game).filter_by(id=mod_game).update({'mods_count': tool.get_mods_count(session=session, game_id=mod_game)})
+        session.commit()
+
     return JSONResponse(status_code=202, content="Complite")
 
 
