@@ -87,6 +87,7 @@ async def mod_dowloader_request(request: Request, mod_id: int, token: str = None
     """
     Нужно передать `ID` мода **Steam**.
     Если у сервера уже есть этот мод - он его отправит как `ZIP` архив со сжатием `ZIP_BZIP2`.
+    Если у сервера уже есть этот мод, но он отмечен непубличным (`public == 2`), то сервер не предоставит его напрямую - запрашивать через микросервис account's!
     Если у сервера нет этого мода он отправит `JSON` с информацией о постановке мода на скачивание.
     Мод добавляется в TO-DO список задач и будет загруен как только придет его очередь.
     """
@@ -288,6 +289,7 @@ async def download(request: Request, mod_id: int, token: str = None):
     """
     Нужно передать `ID` мода.
     Если у сервера уже есть этот мод - он его отправит как `ZIP` архив со сжатием `ZIP_BZIP2`.
+    Если у сервера уже есть этот мод, но он отмечен непубличным (`public == 2`), то сервер не предоставит его напрямую - запрашивать через микросервис account's!
     Эта самая быстрая команда загрузки, но если на сервере не будет запрашиваемого мода никаких действий по его загрузке предпринято не будет.
     """
     stc.update("/download/")
@@ -401,7 +403,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
                    short_description: bool = False, description: bool = False, dates: bool = False,
                    general: bool = True):
     """
-    Возвращает список модов к конкретной игре, которые есть на сервере. Не до конца провалидированные моды в список не попадают.
+    Возвращает список модов к конкретной игре, которые есть на сервере. Не до конца провалидированные моды и не полностью публичные моды в список не попадают.
 
     1. `page_size` *(int)* - размер 1 страницы. Диапазон - 1...50 элементов.
     2. `page` *(int)* - номер странице. Не должна быть отрицательной.
@@ -797,7 +799,7 @@ async def list_resources_mods(mods_list_id, page_size: int = 10, page: int = 0, 
 async def game_info(game_id: int, short_description: bool = False, description: bool = False, dates: bool = False,
                     statistics: bool = False):
     """
-    Возвращает информацию об конкретном моде, а так же его состояние на сервере.
+    Возвращает информацию об конкретной игре, а так же его состояние на сервере.
 
     1. `short_description` *(bool)* - отправлять ли короткое описание. По умолчанию `False`.
     2. `description` *(bool)* - отправлять ли описание. По умолчанию `False`.
@@ -848,7 +850,8 @@ async def game_info(game_id: int, short_description: bool = False, description: 
 async def mod_info(request: Request, mod_id: int, token: str = None, dependencies: bool = False, short_description: bool = False, description: bool = False,
                    dates: bool = False, general: bool = True, game: bool = False):
     """
-    Возвращает информацию о конкретной игре.
+    Возвращает информацию о конкретном моде.
+    Если у сервера уже есть этот мод, но он отмечен непубличным (`public == 2`), то сервер не предоставит его напрямую - запрашивать через микросервис account's!
 
     1. `mod_id` *(int)* - id мода.
     2. `dependencies` *(bool)* - передать ли список ID модов от которых зависит этот мод. (ограничено 20 элементами)
@@ -984,6 +987,7 @@ async def condition_mods(ids_array):
 async def statistics_delay():
     """
     Все данные возвращаются в миллисекундах *(int)*.
+
     Возвращает информацию о среднестатистической задержке при:
     1. `fast` - задержка обработки запроса о получении мода который есть на сервере.
     Важно понимать что сюда попадает только время затраченное на непосредственно обработку запроса сервером.
@@ -1170,7 +1174,15 @@ async def statistics_type_map(request: Request):
 async def account_add_game(request: Request, token: str, game_name: str, game_short_desc: str, game_desc: str,
                            game_type: str = "game", game_logo: str = ""):
     """
+    Добавляет моды в базу.
 
+    Типы приложенией не ограничены, но есть следующие "официально поддерживаемые" типы: `game`, `app`, `tool`.
+
+    `game_logo` - это url на изображение.
+
+    Local функция!
+
+    Возвращает ID созданного элемента.
     """
     if not await access(request=request, user_token=token, real_token=config.token_add_game):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1199,7 +1211,11 @@ async def account_add_game(request: Request, token: str, game_name: str, game_sh
 @app.post("/account/add/genre")
 async def account_add_genre(request: Request, token: str, genre_name: str):
     """
+    Добавляет жанры в базу.
 
+    Local функция!
+
+    Возвращает ID созданного элемента.
     """
     if not await access(request=request, user_token=token, real_token=config.token_add_genre):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1220,7 +1236,11 @@ async def account_add_genre(request: Request, token: str, genre_name: str):
 @app.post("/account/add/tag")
 async def account_add_tag(request: Request, token: str, tag_name: str):
     """
+    Добавляет теги в базу.
 
+    Local функция!
+
+    Возвращает ID созданного элемента.
     """
     if not await access(request=request, user_token=token, real_token=config.token_add_tag):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1242,7 +1262,15 @@ async def account_add_tag(request: Request, token: str, tag_name: str):
 async def account_add_resource(request: Request, token: str, resource_type_name: str, resource_url_name: str,
                                resource_owner_id: int):
     """
+    Добавляет ресурсы модов в базу.
 
+    Типы ресурсов не ограничены, но есть следующие "официально поддерживаемые" типы: `logo`, `screenshot`.
+
+    `resource_owner_id` - это id мода за которым закреплен ресурс.
+
+    Local функция!
+
+    Возвращает ID созданного элемента.
     """
     if not await access(request=request, user_token=token, real_token=config.token_add_resource):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1267,7 +1295,22 @@ async def account_add_resource(request: Request, token: str, resource_type_name:
 async def account_add_mod(request: Request, token: str, mod_name: str, mod_short_description: str,
                           mod_description: str, mod_source: str, mod_game: int, mod_public: int, mod_file: UploadFile):
     """
+    Добавляет моды в базу.
     Ограничение на архив - 800МБ. Ограничения на не сжатый размер мода нет.
+
+    Публичность:
+
+    `0` - Полностью публичен.
+
+    `1` - Скрытый, но доступен по прямому запросу.
+
+    `2` - Доступен только через микросервис account.
+
+    `mod_source` - `local`, другие источники не предполагаются через эту функцию, но не ограничиваются.
+
+    Local функция!
+
+    Возвращает ID созданного элемента.
     """
     if not await access(request=request, user_token=token, real_token=config.token_add_mod):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1331,7 +1374,11 @@ async def account_edit_game(request: Request, token: str, game_id: int, game_nam
                             game_short_desc: str = None, game_desc: str = None, game_type: str = None,
                             game_logo: str = None, game_source: str = None):
     """
+    Изменяет игры в базе. Принимает обязательно ID игры.
 
+    Обязательно должен быть передать один из не обязательных параметров.
+
+    Local функция!
     """
     if not await access(request=request, user_token=token, real_token=config.token_edit_game):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1367,7 +1414,11 @@ async def account_edit_game(request: Request, token: str, game_id: int, game_nam
 @app.post("/account/edit/genre")
 async def account_edit_genre(request: Request, token: str, genre_id: int, genre_name: str = None):
     """
+    Изменяет жанр в базе. Принимает обязательно ID жанра.
 
+    Обязательно должен быть передать один из не обязательных параметров.
+
+    Local функция!
     """
     if not await access(request=request, user_token=token, real_token=config.token_edit_genre):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1394,7 +1445,11 @@ async def account_edit_genre(request: Request, token: str, genre_id: int, genre_
 @app.post("/account/edit/tag")
 async def account_edit_tag(request: Request, token: str, tag_id: int, tag_name: str = None):
     """
+    Изменяет теги в базе. Принимает обязательно ID тега.
 
+    Обязательно должен быть передать один из не обязательных параметров.
+
+    Local функция!
     """
     if not await access(request=request, user_token=token, real_token=config.token_edit_tag):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1421,7 +1476,11 @@ async def account_edit_tag(request: Request, token: str, tag_id: int, tag_name: 
 async def account_edit_resource(request: Request, token: str, resource_id: int, resource_type: str = None,
                                 resource_url: str = None, resource_owner_id: str = None):
     """
+    Изменяет ресурс мода в базе. Принимает обязательно ID ресурса.
 
+    Обязательно должен быть передать один из не обязательных параметров.
+
+    Local функция!
     """
     if not await access(request=request, user_token=token, real_token=config.token_edit_resource):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1455,7 +1514,20 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
                            mod_short_description: str = None, mod_description: str = None, mod_source: str = None,
                            mod_game: int = None, mod_public: int = None, mod_file: UploadFile = None):
     """
+    Изменяет моды в базе. Принимает обязательно ID мода.
+    Ограничение на архив - 800МБ. Ограничения на не сжатый размер мода нет.
 
+    Публичность:
+
+    `0` - Полностью публичен.
+
+    `1` - Скрытый, но доступен по прямому запросу.
+
+    `2` - Доступен только через микросервис account.
+
+    `mod_source` - `local`, другие источники не предполагаются через эту функцию, но не ограничиваются.
+
+    Local функция!
     """
     if not await access(request=request, user_token=token, real_token=config.token_edit_mod):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1525,23 +1597,38 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
 @app.post("/account/delete/game")
 async def account_delete_game(request: Request, token: str, game_id: int):
     """
+    Удаляет игру в базе. Принимает обязательно ID игры.
 
+    При удалении игры, автоматически удаляются и ассоциации жанров и тегов.
+    Моды, которыми владеет игра сохраняются ради безопасности.
+
+    Local функция!
     """
     if not await access(request=request, user_token=token, real_token=config.token_delete_game):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     delete_game = delete(sdc.Game).where(sdc.Game.id == game_id)
 
+    delete_genres_association = sdc.game_genres.delete().where(sdc.game_genres.c.game_id == game_id)
+    delete_tags_association = sdc.allowed_mods_tags.delete().where(sdc.allowed_mods_tags.c.game_id == game_id)
+
     # Выполнение операции DELETE
     session.execute(delete_game)
+    session.execute(delete_genres_association)
+    session.execute(delete_tags_association)
     session.commit()
+
     return JSONResponse(status_code=202, content="Complite")
 
 
 @app.post("/account/delete/genre")
 async def account_delete_genre(request: Request, token: str, genre_id: int):
     """
+    Удаляет жанр в базе. Принимает обязательно ID жанра.
 
+    При удалении жанра, автоматически удаляются и ассоциации его с играми.
+
+    Local функция!
     """
     if not await access(request=request, user_token=token, real_token=config.token_delete_genre):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1560,7 +1647,11 @@ async def account_delete_genre(request: Request, token: str, genre_id: int):
 @app.post("/account/delete/tag")
 async def account_delete_tag(request: Request, token: str, tag_id: int):
     """
+    Удаляет тег в базе. Принимает обязательно ID тега.
 
+    При удалении тега, автоматически удаляются и ассоциации этого тега с жанрами и играми.
+
+    Local функция!
     """
     if not await access(request=request, user_token=token, real_token=config.token_delete_tag):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1581,7 +1672,9 @@ async def account_delete_tag(request: Request, token: str, tag_id: int):
 @app.post("/account/delete/resource")
 async def account_delete_resource(request: Request, token: str, resource_id: int):
     """
+    Удаляет ресурс мода в базе. Принимает обязательно ID ресурса.
 
+    Local функция!
     """
     if not await access(request=request, user_token=token, real_token=config.token_delete_resource):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1597,7 +1690,12 @@ async def account_delete_resource(request: Request, token: str, resource_id: int
 @app.post("/account/delete/mod")
 async def account_delete_mod(request: Request, token: str, mod_id: int):
     """
+    Удаляет мод в базе. Принимает обязательно ID мода.
 
+    При удалении мода, автоматически удаляются и ассоциации этого мода с жанрами, и тегами.
+    Так же удаляются записи о ресурсах этого мода, и ZIP архив мода.
+
+    Local функция!
     """
     if not await access(request=request, user_token=token, real_token=config.token_delete_mod):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1626,11 +1724,15 @@ async def account_delete_mod(request: Request, token: str, mod_id: int):
     return JSONResponse(status_code=202, content="Complite")
 
 
+#TODO от сюда
 @app.post("/account/association/game/genre")
 async def account_association_game_genre(request: Request, token: str, game_id: int, mode: bool, genre_id: int):
     """
-    `mode = True` - добавить ассоциацию
-    `mode = False` - удалить ассоциацию
+    Управляет ассоциацией жанров к играм в базе. Принимает обязательно ID игры и жанра.
+
+    Режим работы (`mode`): `mode = True` - добавить ассоциацию; `mode = False` - удалить ассоциацию.
+
+    Local функция!
     """
     if not await access(request=request, user_token=token, real_token=config.token_association_game_genre):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1657,8 +1759,11 @@ async def account_association_game_genre(request: Request, token: str, game_id: 
 @app.post("/account/association/game/tag")
 async def account_association_game_tag(request: Request, token: str, game_id: int, mode: bool, tag_id: int):
     """
-    `mode = True` - добавить ассоциацию
-    `mode = False` - удалить ассоциацию
+    Управляет ассоциацией тегов к играм в базе. Принимает обязательно ID игры и тега.
+
+    Режим работы (`mode`): `mode = True` - добавить ассоциацию; `mode = False` - удалить ассоциацию.
+
+    Local функция!
     """
     if not await access(request=request, user_token=token, real_token=config.token_association_game_tag):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1685,8 +1790,11 @@ async def account_association_game_tag(request: Request, token: str, game_id: in
 @app.post("/account/association/mod/tag")
 async def account_association_mod_tag(request: Request, token: str, mod_id: int, mode: bool, tag_id: int):
     """
-    `mode = True` - добавить ассоциацию
-    `mode = False` - удалить ассоциацию
+    Управляет ассоциацией тега к модам в базе. Принимает обязательно ID мода и тега.
+
+    Режим работы (`mode`): `mode = True` - добавить ассоциацию; `mode = False` - удалить ассоциацию.
+
+    Local функция!
     """
     if not await access(request=request, user_token=token, real_token=config.token_association_mod_tag):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
@@ -1713,8 +1821,11 @@ async def account_association_mod_tag(request: Request, token: str, mod_id: int,
 @app.post("/account/association/mod/dependencie")
 async def account_association_mod_dependencie(request: Request, token: str, mod_id: int, mode: bool, dependencie: int):
     """
-    `mode = True` - добавить ассоциацию
-    `mode = False` - удалить ассоциацию
+    Управляет ассоциацией модов к своим зависимостям (других модам) в базе. Принимает обязательно ID мода и мода от которого он зависит.
+
+    Режим работы (`mode`): `mode = True` - добавить ассоциацию; `mode = False` - удалить ассоциацию.
+
+    Local функция!
     """
     if not await access(request=request, user_token=token, real_token=config.token_association_mod_dependencie):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
