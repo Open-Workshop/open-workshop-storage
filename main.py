@@ -1259,7 +1259,7 @@ async def account_add_tag(request: Request, token: str, tag_name: str):
 
 
 @app.post("/account/add/resource")
-async def account_add_resource(request: Request, token: str, resource_type_name: str, resource_url_name: str,
+async def account_add_resource(request: Request, token: str, resource_type_name: str, resource_url: str,
                                resource_owner_id: int):
     """
     Добавляет ресурсы модов в базу.
@@ -1277,7 +1277,7 @@ async def account_add_resource(request: Request, token: str, resource_type_name:
 
     insert_statement = insert(sdc.ResourceMod).values(
         type=resource_type_name,
-        url=resource_url_name,
+        url=resource_url,
         date_event=datetime.now(),
         owner_id=resource_owner_id
     ).returning(sdc.ResourceMod.id)
@@ -1474,7 +1474,7 @@ async def account_edit_tag(request: Request, token: str, tag_id: int, tag_name: 
 
 @app.post("/account/edit/resource")
 async def account_edit_resource(request: Request, token: str, resource_id: int, resource_type: str = None,
-                                resource_url: str = None, resource_owner_id: str = None):
+                                resource_url: str = None, resource_owner_id: int = None):
     """
     Изменяет ресурс мода в базе. Принимает обязательно ID ресурса.
 
@@ -1561,6 +1561,11 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
 
 
     if mod_file:
+        if mod_file.size >= 838860800:
+            return JSONResponse(status_code=413, content="The file is too large.")
+        elif not mod_file.filename.endswith(".zip"):
+            return JSONResponse(status_code=400, content="Only ZIP archives are accepted.")
+
         file_path = f"users_files_processing/{mod_id}.zip"
         with open(file_path, "wb") as f:
             f.write(await mod_file.read())

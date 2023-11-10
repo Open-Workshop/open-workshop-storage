@@ -690,7 +690,545 @@ Access denied. This case will be reported.
 ```
 HTTP code: `403`
 
-# TODO *(не все POST функции продукоментированны)*
+
+### POST `/account/add/genre`
+
+Локальная функция!
+
+Добавляет жанры в базу. 
+
+Принимает следующие обязательные параметры:
+1. `genre_name` *(str)* - название жанра.
+
+**JSON ответ:**
+1. Успешно:
+```
+genre_id
+```
+HTTP code: `202`
+* Возвращает ID созданного элемента. 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403`
+
+
+### POST `/account/add/tag`
+
+Локальная функция!
+
+Добавляет тег в базу. 
+
+Принимает следующие обязательные параметры:
+1. `tag_name` *(str)* - название тега.
+
+**JSON ответ:**
+1. Успешно:
+```
+tag_id
+```
+HTTP code: `202`
+* Возвращает ID созданного элемента. 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403`
+
+
+### POST `/account/add/resource`
+
+Локальная функция!
+
+Добавляет ресурс мода в базу. 
+
+Принимает следующие обязательные параметры:
+1. `resource_type_name` *(str)* - тип ресурса. Типы ресурсов не ограничены, но есть следующие "официально поддерживаемые" типы: `logo`, `screenshot`.
+2. `resource_url` *(str)* - ссылка на ресурс.
+3. `resource_owner_id` *(int)* - ID мода владельца.
+
+**JSON ответ:**
+1. Успешно:
+```
+resource_id
+```
+HTTP code: `202`
+* Возвращает ID созданного элемента. 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403`
+
+
+### POST `/account/add/mod`
+
+Локальная функция!
+
+Добавляет мод в базу.
+
+Принимает следующие обязательные параметры:
+1. `mod_name` *(str)* - название мода.
+2. `mod_short_description` *(str)* - короткое описание мода *(до 256 символов)*.
+3. `mod_description` *(str)* - описание мода.
+4. `mod_source` *(str)* - источник мода, в данном случае всегда `local`.
+5. `mod_game` *(int)* - ID игры-владельца мода.
+6. `mod_public` *(int)* - публичность мода. `0` - публичен; `1` - доступен по прямой ссылке; `2` - доступ только через микросервис account.
+7. `mod_file` *(file)* - сам мод. Ограничение на архив - 800МБ. Ограничения на не сжатый размер мода нет.
+
+**JSON ответ:**
+1. Успешно:
+```
+mod_id
+```
+HTTP code: `202`
+* Возвращает ID созданного элемента. 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403`
+3. Превышен размер файла:
+```
+The file is too large.
+```
+HTTP code: `413`
+4. Прислан не ZIP архив:
+```
+Only ZIP archives are accepted.
+```
+HTTP code: `400`
+4. Ошибка обработки файла:
+```
+An unknown error occurred while checking the archive standard.
+```
+HTTP code: `500`
+
+
+### POST `/account/edit/game`
+
+Локальная функция!
+
+Редактирует игру в базе.
+
+Обязательно передать ID игры - `game_id` *(int)*.
+
+Нужно передать хотя бы 1 из необязательных параметров.
+Принимает следующие необязательные параметры:
+1. `game_name` *(str)* - название игры.
+2. `game_short_desc` *(str)* - короткое описание игры.
+3. `game_desc` *(str)* - полное описание игры.
+4. `game_type` *(str)* - тип игры. Типы приложений не ограничены, но есть следующие "официально поддерживаемые" типы: `game`, `app`, `tool`.
+5. `game_logo` *(str)* - ссылка на лого игры.
+6. `game_source` *(str)* - источник игры.
+
+**JSON ответ:**
+1. Успешно:
+```
+Complite
+```
+HTTP code: `202` 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403` 
+3. Элемент не найден:
+```
+The element does not exist.
+```
+HTTP code: `404`
+3. Запрос пустой:
+```
+The request is empty
+```
+HTTP code: `418`
+
+
+### POST `/account/edit/genre`
+
+Локальная функция!
+
+Редактирует жанр в базе.
+
+Обязательно передать ID жанра - `genre_id` *(int)*.
+
+Нужно передать хотя бы 1 из необязательных параметров.
+Принимает следующие необязательные параметры:
+1. `genre_name` *(str)* - название жанра.
+
+**JSON ответ:**
+1. Успешно:
+```
+Complite
+```
+HTTP code: `202` 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403` 
+3. Элемент не найден:
+```
+The element does not exist.
+```
+HTTP code: `404`
+3. Запрос пустой:
+```
+The request is empty
+```
+HTTP code: `418`
+
+
+### POST `/account/edit/tag`
+
+Локальная функция!
+
+Редактирует тег в базе.
+
+Обязательно передать ID тега - `tag_id` *(int)*.
+
+Нужно передать хотя бы 1 из необязательных параметров.
+Принимает следующие необязательные параметры:
+1. `tag_name` *(str)* - название тега.
+
+**JSON ответ:**
+1. Успешно:
+```
+Complite
+```
+HTTP code: `202` 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403` 
+3. Элемент не найден:
+```
+The element does not exist.
+```
+HTTP code: `404`
+3. Запрос пустой:
+```
+The request is empty
+```
+HTTP code: `418`
+
+
+### POST `/account/edit/resource`
+
+Локальная функция!
+
+Редактирует ресурс игры в базе.
+
+Обязательно передать ID ресурса - `resource_id` *(int)*.
+
+Нужно передать хотя бы 1 из необязательных параметров.
+Принимает следующие необязательные параметры:
+1. `resource_type` *(str)* - тип ресурса. Типы ресурсов не ограничены, но есть следующие "официально поддерживаемые" типы: `logo`, `screenshot`.
+2. `resource_url` *(str)* - ссылка на ресурс.
+3. `resource_owner_id` *(int)* - id мода-владельца ресурса.
+
+**JSON ответ:**
+1. Успешно:
+```
+Complite
+```
+HTTP code: `202` 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403` 
+3. Элемент не найден:
+```
+The element does not exist.
+```
+HTTP code: `404`
+3. Запрос пустой:
+```
+The request is empty
+```
+HTTP code: `418`
+
+
+### POST `/account/edit/mod`
+
+Локальная функция!
+
+Редактирует моды в базе.
+
+Обязательно передать ID мода - `mod_id` *(int)*.
+
+Нужно передать хотя бы 1 из необязательных параметров.
+Принимает следующие необязательные параметры:
+1. `mod_name` *(str)* - название мода.
+2. `mod_short_description` *(str)* - короткое описание (до 256 символов).
+3. `mod_description` *(str)* - описание.
+4. `mod_source` *(str)* - источник мода.
+5. `mod_game` *(int)* - ID игры-владельца.
+6. `mod_public` *(int)* - режим публичности.
+7. `mod_file` *(file)* - ZIP файл, ограничение 800МБ.
+
+**JSON ответ:**
+1. Успешно:
+```
+Complite
+```
+HTTP code: `202` 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403` 
+3. Элемент не найден:
+```
+The element does not exist.
+```
+HTTP code: `404`
+4. Запрос пустой:
+```
+The request is empty
+```
+HTTP code: `418`
+5. Превышен размер файла:
+```
+The file is too large.
+```
+HTTP code: `413`
+6. Прислан не ZIP архив:
+```
+Only ZIP archives are accepted.
+```
+HTTP code: `400`
+7. Ошибка обработки файла:
+```
+An unknown error occurred while checking the archive standard.
+```
+HTTP code: `500`
+
+
+### POST `/account/delete/game`
+
+Локальная функция!
+
+Удаляет игру из базы.
+
+Обязательно передать ID игры - `game_id` *(int)*.
+
+Записи об ассоциации этой игры с тегами и жанрами автоматически удаляются.
+
+**JSON ответ:**
+1. Успешно:
+```
+Complite
+```
+HTTP code: `202` 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403`
+
+
+### POST `/account/delete/genre`
+
+Локальная функция!
+
+Удаляет жанр из базы.
+
+Обязательно передать ID игры - `genre_id` *(int)*.
+
+Записи об ассоциации этого жанра с играми автоматически удаляются.
+
+**JSON ответ:**
+1. Успешно:
+```
+Complite
+```
+HTTP code: `202` 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403`
+
+
+### POST `/account/delete/tag`
+
+Локальная функция!
+
+Удаляет тег из базы.
+
+Обязательно передать ID тега - `tag_id` *(int)*.
+
+Записи об ассоциации этого тега с играми и модами автоматически удаляются.
+
+**JSON ответ:**
+1. Успешно:
+```
+Complite
+```
+HTTP code: `202` 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403`
+
+
+### POST `/account/delete/resource`
+
+Локальная функция!
+
+Удаляет ресурс мода из базы.
+
+Обязательно передать ID ресурса - `resource_id` *(int)*.
+
+**JSON ответ:**
+1. Успешно:
+```
+Complite
+```
+HTTP code: `202` 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403`
+
+
+### POST `/account/delete/mod`
+
+Локальная функция!
+
+Удаляет мод из базы.
+
+Обязательно передать ID ресурса - `mod_id` *(int)*.
+
+Записи об ассоциации этого мода с тегами и жанрами, а так же ресурсы и зависимости мода автоматически удаляются.
+ZIP архив мода так же удаляется.
+
+**JSON ответ:**
+1. Успешно:
+```
+Complite
+```
+HTTP code: `202` 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403`
+
+
+### POST `/account/association/game/genre`
+
+Локальная функция!
+
+Управляет ассоциацией игра-жанры.
+
+Обязательно передать ID игры - `game_id` *(int)*, ID жанра - `genre_id` *(int)*, а так же режим действия `mode` *(bool)*.
+Режим работы (`mode`): `mode = True` - добавить ассоциацию; `mode = False` - удалить ассоциацию.
+
+**JSON ответ:**
+1. Успешно:
+```
+Complite
+```
+HTTP code: `202` 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403`
+3. Ассоциация уже существует *(при добавлении)*:
+```
+The association is already present
+```
+HTTP code: `409`
+
+
+### POST `/account/association/game/tag`
+
+Локальная функция!
+
+Управляет ассоциацией игра-теги.
+
+Обязательно передать ID игры - `game_id` *(int)*, ID тега - `tag_id` *(int)*, а так же режим действия `mode` *(bool)*.
+Режим работы (`mode`): `mode = True` - добавить ассоциацию; `mode = False` - удалить ассоциацию.
+
+**JSON ответ:**
+1. Успешно:
+```
+Complite
+```
+HTTP code: `202` 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403`
+3. Ассоциация уже существует *(при добавлении)*:
+```
+The association is already present
+```
+HTTP code: `409`
+
+
+### POST `/account/association/mod/tag`
+
+Локальная функция!
+
+Управляет ассоциацией мод-теги.
+
+Обязательно передать ID мода - `mod_id` *(int)*, ID тега - `tag_id` *(int)*, а так же режим действия `mode` *(bool)*.
+Режим работы (`mode`): `mode = True` - добавить ассоциацию; `mode = False` - удалить ассоциацию.
+
+**JSON ответ:**
+1. Успешно:
+```
+Complite
+```
+HTTP code: `202` 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403`
+3. Ассоциация уже существует *(при добавлении)*:
+```
+The association is already present
+```
+HTTP code: `409`
+
+
+### POST `/account/association/mod/dependencie`
+
+Локальная функция!
+
+Управляет ассоциацией мод-зависимости_мода.
+
+Обязательно передать ID мода - `mod_id` *(int)*, ID мода от которого зависим - `dependencie` *(int)*, а так же режим действия `mode` *(bool)*.
+Режим работы (`mode`): `mode = True` - добавить ассоциацию; `mode = False` - удалить ассоциацию.
+
+**JSON ответ:**
+1. Успешно:
+```
+Complite
+```
+HTTP code: `202` 
+2. Отказано в доступе:
+```
+Access denied. This case will be reported.
+```
+HTTP code: `403`
+3. Ассоциация уже существует *(при добавлении)*:
+```
+The association is already present
+```
+HTTP code: `409`
 
 
 # Установка на свой сервер
