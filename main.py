@@ -134,7 +134,7 @@ async def mod_dowloader_request(request: Request, mod_id: int, token: str = None
     if (rows != None and len(rows) > 0) or os.path.isfile(zip_path) or os.path.isdir(
             real_path):  # Проверяем есть ли запись на сервере в каком-либо виде
         if rows != None and len(rows) > 0 and rows[0].public >= 2:
-            if not await access(request=request, user_token=token, real_token=config.token_steam_download_mod):
+            if not await access(request=request, user_token=token, real_token=config.token_steam_download_mod, func_name="steam download"):
                 return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
         if (rows != None and len(rows) > 0) and os.path.isfile(zip_path):  # Если это ZIP архив - отправляем
@@ -312,7 +312,7 @@ async def download(request: Request, mod_id: int, token: str = None):
             return JSONResponse(status_code=102, content={"message": "this mod is still loading", "error_id": 3})
 
         if rows[0].public >= 2:
-            if not await access(request=request, user_token=token, real_token=config.token_download_mod):
+            if not await access(request=request, user_token=token, real_token=config.token_download_mod, func_name="download"):
                 return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
         output = stt.checker(rows=rows, steam_path=path, mod_id=mod_id, session=session)
@@ -891,7 +891,7 @@ async def mod_info(request: Request, mod_id: int, token: str = None, dependencie
     output["pre_result"] = query.first()
 
     if output["pre_result"].public >= 2:
-        if not await access(request=request, user_token=token, real_token=config.token_info_mod):
+        if not await access(request=request, user_token=token, real_token=config.token_info_mod, func_name="info mod"):
             session.close()
             return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
@@ -1174,7 +1174,7 @@ async def statistics_type_map(request: Request):
 async def account_add_game(request: Request, token: str, game_name: str, game_short_desc: str, game_desc: str,
                            game_type: str = "game", game_logo: str = ""):
     """
-    Добавляет моды в базу.
+    Добавляет игры в базу.
 
     Типы приложенией не ограничены, но есть следующие "официально поддерживаемые" типы: `game`, `app`, `tool`.
 
@@ -1184,7 +1184,7 @@ async def account_add_game(request: Request, token: str, game_name: str, game_sh
 
     Возвращает ID созданного элемента.
     """
-    if not await access(request=request, user_token=token, real_token=config.token_add_game):
+    if not await access(request=request, user_token=token, real_token=config.token_add_game, func_name="add game"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     insert_statement = insert(sdc.Game).values(
@@ -1217,7 +1217,7 @@ async def account_add_genre(request: Request, token: str, genre_name: str):
 
     Возвращает ID созданного элемента.
     """
-    if not await access(request=request, user_token=token, real_token=config.token_add_genre):
+    if not await access(request=request, user_token=token, real_token=config.token_add_genre, func_name="add genre"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     insert_statement = insert(sdc.Genres).values(
@@ -1242,7 +1242,7 @@ async def account_add_tag(request: Request, token: str, tag_name: str):
 
     Возвращает ID созданного элемента.
     """
-    if not await access(request=request, user_token=token, real_token=config.token_add_tag):
+    if not await access(request=request, user_token=token, real_token=config.token_add_tag, func_name="add tag"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     insert_statement = insert(sdc.ModTag).values(
@@ -1272,7 +1272,7 @@ async def account_add_resource(request: Request, token: str, resource_type_name:
 
     Возвращает ID созданного элемента.
     """
-    if not await access(request=request, user_token=token, real_token=config.token_add_resource):
+    if not await access(request=request, user_token=token, real_token=config.token_add_resource, func_name="add resource"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     insert_statement = insert(sdc.ResourceMod).values(
@@ -1312,7 +1312,7 @@ async def account_add_mod(request: Request, token: str, mod_name: str, mod_short
 
     Возвращает ID созданного элемента.
     """
-    if not await access(request=request, user_token=token, real_token=config.token_add_mod):
+    if not await access(request=request, user_token=token, real_token=config.token_add_mod, func_name="add mod"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     if mod_file.size >= 838860800:
@@ -1380,7 +1380,7 @@ async def account_edit_game(request: Request, token: str, game_id: int, game_nam
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_edit_game):
+    if not await access(request=request, user_token=token, real_token=config.token_edit_game, func_name="edit game"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     game = session.query(sdc.Game).filter_by(id=game_id)
@@ -1420,7 +1420,7 @@ async def account_edit_genre(request: Request, token: str, genre_id: int, genre_
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_edit_genre):
+    if not await access(request=request, user_token=token, real_token=config.token_edit_genre, func_name="edit genre"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     game = session.query(sdc.Genres).filter_by(id=genre_id)
@@ -1451,7 +1451,7 @@ async def account_edit_tag(request: Request, token: str, tag_id: int, tag_name: 
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_edit_tag):
+    if not await access(request=request, user_token=token, real_token=config.token_edit_tag, func_name="edit tag"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     tag = session.query(sdc.ModTag).filter_by(id=tag_id)
@@ -1482,7 +1482,7 @@ async def account_edit_resource(request: Request, token: str, resource_id: int, 
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_edit_resource):
+    if not await access(request=request, user_token=token, real_token=config.token_edit_resource, func_name="edit resource"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     resource = session.query(sdc.ResourceMod).filter_by(id=resource_id)
@@ -1529,7 +1529,7 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_edit_mod):
+    if not await access(request=request, user_token=token, real_token=config.token_edit_mod, func_name="edit mod"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     mod = session.query(sdc.Mod).filter_by(id=mod_id)
@@ -1604,7 +1604,7 @@ async def account_delete_game(request: Request, token: str, game_id: int):
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_delete_game):
+    if not await access(request=request, user_token=token, real_token=config.token_delete_game, func_name="delete game"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     delete_game = delete(sdc.Game).where(sdc.Game.id == game_id)
@@ -1630,7 +1630,7 @@ async def account_delete_genre(request: Request, token: str, genre_id: int):
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_delete_genre):
+    if not await access(request=request, user_token=token, real_token=config.token_delete_genre, func_name="delete genre"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     delete_game = delete(sdc.Genres).where(sdc.Genres.id == genre_id)
@@ -1653,7 +1653,7 @@ async def account_delete_tag(request: Request, token: str, tag_id: int):
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_delete_tag):
+    if not await access(request=request, user_token=token, real_token=config.token_delete_tag, func_name="delete tag"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     delete_game = delete(sdc.ModTag).where(sdc.ModTag.id == tag_id)
@@ -1676,7 +1676,7 @@ async def account_delete_resource(request: Request, token: str, resource_id: int
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_delete_resource):
+    if not await access(request=request, user_token=token, real_token=config.token_delete_resource, func_name="delete resource"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     delete_resource = delete(sdc.ResourceMod).where(sdc.ResourceMod.id == resource_id)
@@ -1697,7 +1697,7 @@ async def account_delete_mod(request: Request, token: str, mod_id: int):
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_delete_mod):
+    if not await access(request=request, user_token=token, real_token=config.token_delete_mod, func_name="delete mod"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     query_game = session.query(sdc.Mod.game).filter(sdc.Mod.id == mod_id).first().game
@@ -1724,7 +1724,6 @@ async def account_delete_mod(request: Request, token: str, mod_id: int):
     return JSONResponse(status_code=202, content="Complite")
 
 
-#TODO от сюда
 @app.post("/account/association/game/genre")
 async def account_association_game_genre(request: Request, token: str, game_id: int, mode: bool, genre_id: int):
     """
@@ -1734,7 +1733,7 @@ async def account_association_game_genre(request: Request, token: str, game_id: 
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_association_game_genre):
+    if not await access(request=request, user_token=token, real_token=config.token_association_game_genre, func_name="association game genre"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     if mode:
@@ -1765,7 +1764,7 @@ async def account_association_game_tag(request: Request, token: str, game_id: in
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_association_game_tag):
+    if not await access(request=request, user_token=token, real_token=config.token_association_game_tag, func_name="association game tag"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     if mode:
@@ -1796,7 +1795,7 @@ async def account_association_mod_tag(request: Request, token: str, mod_id: int,
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_association_mod_tag):
+    if not await access(request=request, user_token=token, real_token=config.token_association_mod_tag, func_name="association mod tag"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     if mode:
@@ -1827,7 +1826,7 @@ async def account_association_mod_dependencie(request: Request, token: str, mod_
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_association_mod_dependencie):
+    if not await access(request=request, user_token=token, real_token=config.token_association_mod_dependencie, func_name="association mod dependencie"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     if mode:
