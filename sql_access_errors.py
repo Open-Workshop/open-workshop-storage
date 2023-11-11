@@ -34,7 +34,7 @@ class AccessOK(base): # Таблица "игры"
     user_ip = Column(String)
     user_port = Column(Integer)
 
-async def access(request: Request, user_token: str, real_token: str, func_name: str = "unknown"):
+async def access(request: Request, user_token: str, real_token: bytes, func_name: str = "unknown"):
     try:
         access_result = await check_access(request=request, user_token=user_token, real_token=real_token)
 
@@ -83,23 +83,18 @@ async def access(request: Request, user_token: str, real_token: str, func_name: 
     except:
         return False
 
-async def check_access(request: Request, user_token: str, real_token: str):
+async def check_access(request: Request, user_token: str, real_token: bytes):
     # Проверяем источник запроса (особо не полагаемся, но пусть будет)
     try:
-        if request.client.host != "127.0.0.1" or not request.url._url.startswith("http://127.0.0.1:8000/account/"):
+        if request.client.host != "127.0.0.1" or not request.url._url.startswith("http://127.0.0.1:8000/"):
             return "user is incorrect"
-        elif request.headers:
-            return "user substitution attempt"
     except:
         return "user error"
 
     # Сравниваем хеши
     try:
-        # Получаем хеш переданного пароля
-        hash_user_token = bcrypt.hashpw(user_token)
-
         # Сравниваем хеши
-        if not bcrypt.checkpw(real_token, hash_user_token):
+        if not bcrypt.checkpw(user_token.encode('utf-8'), real_token):
             return "hash is incorrect"
     except:
         return "hash error"
