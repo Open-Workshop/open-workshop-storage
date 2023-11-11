@@ -3,7 +3,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from fastapi import Request
-import hashlib
+import bcrypt
 
 
 engine = create_engine('sqlite:///sql/access.db')
@@ -84,7 +84,7 @@ async def access(request: Request, user_token: str, real_token: str, func_name: 
         return False
 
 async def check_access(request: Request, user_token: str, real_token: str):
-    # Проверяем источник запроса
+    # Проверяем источник запроса (особо не полагаемся, но пусть будет)
     try:
         if request.client.host != "127.0.0.1" or not request.url._url.startswith("http://127.0.0.1:8000/account/"):
             return "user is incorrect"
@@ -96,10 +96,10 @@ async def check_access(request: Request, user_token: str, real_token: str):
     # Сравниваем хеши
     try:
         # Получаем хеш переданного пароля
-        hash_token = hashlib.sha256(user_token.encode()).hexdigest()
+        hash_user_token = bcrypt.hashpw(user_token)
 
         # Сравниваем хеши
-        if hash_token != real_token:
+        if not bcrypt.checkpw(real_token, hash_user_token):
             return "hash is incorrect"
     except:
         return "hash error"
