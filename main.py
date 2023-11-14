@@ -648,9 +648,10 @@ async def list_tags(game_id: int, page_size: int = 10, page: int = 0):
 
 
 @app.get("/list/tags/mods/{mods_ids_list}")
-async def list_tags_for_mods(mods_ids_list, tags=[], only_ids: bool = False):
+async def list_tags_for_mods(request: Request, mods_ids_list, token: str = None, tags=[], only_ids: bool = False):
     """
-    Возвращает ассоциации модов с тегами
+    Возвращает ассоциации модов с тегами.
+    Если в переданном списке модов есть ID непубличного мода, то будет отказано в доступе, делать такие запросы через микросервис account!
 
     1. `mods_ids_list` - список модов к которым нужно вернуть ассоциации (принимает список ID модов).
     2. `tags` - если не пуст возвращает ассоциации конкретно с этими тегами (принимает список ID тегов).
@@ -669,6 +670,15 @@ async def list_tags_for_mods(mods_ids_list, tags=[], only_ids: bool = False):
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
     session = Session()
+
+    query = session.query(sdc.Mod.id)
+    query = query.filter(sdc.Mod.id.in_(mods_ids_list))
+    query = query.filter(sdc.Mod.public >= 2)
+
+    if len(query.all()) > 0:
+        if not await access(request=request, user_token=token, real_token=config.token_info_mod, func_name="tags for mods"):
+            session.close()
+            return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     # Выполнение запроса
     result = {}
@@ -755,9 +765,10 @@ async def list_genres_for_games(games_ids_list, genres=[], only_ids: bool = Fals
 
 
 @app.get("/list/resources_mods/{mods_list_id}")
-async def list_resources_mods(mods_list_id, page_size: int = 10, page: int = 0, types_resources=[]):
+async def list_resources_mods(request: Request, mods_list_id, token: str = None, page_size: int = 10, page: int = 0, types_resources=[]):
     """
     Возвращает список ресурсов у конкретного мода/списка модов.
+    Если в переданном списке модов есть ID непубличного мода, то будет отказано в доступе, делать такие запросы через микросервис account!
 
     1. `page_size` *(int)* - размер 1 страницы. Диапазон - 1...70 элементов.
     2. `page` *(int)* - номер страницы. Не должна быть отрицательной.
@@ -779,6 +790,16 @@ async def list_resources_mods(mods_list_id, page_size: int = 10, page: int = 0, 
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
     session = Session()
+
+    query = session.query(sdc.Mod.id)
+    query = query.filter(sdc.Mod.id.in_(mods_list_id))
+    query = query.filter(sdc.Mod.public >= 2)
+
+    if len(query.all()) > 0:
+        if not await access(request=request, user_token=token, real_token=config.token_info_mod, func_name="resources for mods"):
+            session.close()
+            return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
     # Выполнение запроса
     query = session.query(sdc.ResourceMod)
     query = query.filter(sdc.ResourceMod.owner_id.in_(mods_list_id))
