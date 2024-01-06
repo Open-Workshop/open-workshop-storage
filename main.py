@@ -1004,7 +1004,7 @@ async def condition_mods(ids_array):
     return output
 
 @app.get("/public/mod/{ids_array}")
-async def public_mods(ids_array):
+async def public_mods(ids_array, catalog:bool = False):
     """
     Возвращает список публичных модов на сервере.
     Принимает массив ID модов. Возвращает масссив id's модов.
@@ -1027,7 +1027,11 @@ async def public_mods(ids_array):
 
     # Выполнение запроса
     query = session.query(sdc.Mod)
-    query = query.filter(sdc.Mod.public <= 1)
+    if catalog:
+        query = query.filter(sdc.Mod.public == 0)
+    else:
+        query = query.filter(sdc.Mod.public <= 1)
+
     query = query.filter(sdc.Mod.id.in_(ids_array))
     for i in query:
         output.append(i.id)
