@@ -1606,7 +1606,7 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
         data_edit["description"] = mod_description
     if mod_source:
         data_edit["source"] = mod_source
-    if mod_public and mod_public in [0, 1, 2]:
+    if mod_public in [0, 1, 2]:
         data_edit["public"] = mod_public
     if mod_game:
         data_edit["game"] = mod_game
