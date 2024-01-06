@@ -1758,28 +1758,32 @@ async def account_delete_mod(request: Request, token: str, mod_id: int):
     if not await access(request=request, user_token=token, real_token=config.token_delete_mod, func_name="delete mod"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
-    query_game = session.query(sdc.Mod.game).filter(sdc.Mod.id == mod_id).first().game
-    mod_path = f"mods/{query_game}/{mod_id}.zip"
+    try:
+        query_game = session.query(sdc.Mod.game).filter(sdc.Mod.id == mod_id).first().game
+        mod_path = f"mods/{query_game}/{mod_id}.zip"
 
-    delete_game = delete(sdc.Mod).where(sdc.Mod.id == mod_id)
-    delete_dependence_association = sdc.mods_dependencies.delete().where(sdc.mods_dependencies.c.mod_id == mod_id)
-    delete_tags_association = sdc.mods_tags.delete().where(sdc.mods_tags.c.mod_id == mod_id)
-    delete_resource = delete(sdc.ResourceMod).where(sdc.ResourceMod.owner_id == mod_id)
+        delete_game = delete(sdc.Mod).where(sdc.Mod.id == mod_id)
+        delete_dependence_association = sdc.mods_dependencies.delete().where(sdc.mods_dependencies.c.mod_id == mod_id)
+        delete_tags_association = sdc.mods_tags.delete().where(sdc.mods_tags.c.mod_id == mod_id)
+        delete_resource = delete(sdc.ResourceMod).where(sdc.ResourceMod.owner_id == mod_id)
 
 
-    # Выполнение операции DELETE
-    session.execute(delete_game)
-    session.execute(delete_dependence_association)
-    session.execute(delete_tags_association)
-    session.execute(delete_resource)
-    session.commit()
+        # Выполнение операции DELETE
+        session.execute(delete_game)
+        session.execute(delete_dependence_association)
+        session.execute(delete_tags_association)
+        session.execute(delete_resource)
+        session.commit()
 
-    os.remove(mod_path)
+        os.remove(mod_path)
 
-    session.query(sdc.Game).filter_by(id=query_game).update({'mods_count': tool.get_mods_count(session=session, game_id=query_game)})
-    session.commit()
+        if session.query(sdc.Game).filter_by(id=query_game).first():
+            session.query(sdc.Game).filter_by(id=query_game).update({'mods_count': tool.get_mods_count(session=session, game_id=query_game)})
+        session.commit()
 
-    return JSONResponse(status_code=202, content="Complite")
+        return JSONResponse(status_code=202, content="Complite")
+    except:
+        return JSONResponse(status_code=500, content="Error")
 
 
 @app.post("/account/association/game/genre")
