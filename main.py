@@ -1003,6 +1003,38 @@ async def condition_mods(ids_array):
 
     return output
 
+@app.get("/public/mod/{ids_array}")
+async def public_mods(ids_array):
+    """
+    Возвращает список публичных модов на сервере.
+    Принимает массив ID модов. Возвращает масссив id's модов.
+    Ограничение на разовый запрос - 50 элементов.
+    """
+    stc.update("/public/mod/")
+
+    ids_array = tool.str_to_list(ids_array)
+
+    if len(ids_array) < 1 or len(ids_array) > 50:
+        return JSONResponse(status_code=413, content={"message": "the size of the array is not correct", "error_id": 1})
+
+    print(ids_array)
+
+    output = []
+
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
+
+    # Выполнение запроса
+    query = session.query(sdc.Mod)
+    query = query.filter(sdc.Mod.public == 0)
+    query = query.filter(sdc.Mod.id.in_(ids_array))
+    for i in query:
+        output.append(i.id)
+
+    session.close()
+    return output
+
 
 @app.get("/statistics/delay")
 async def statistics_delay():
