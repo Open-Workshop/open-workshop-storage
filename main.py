@@ -10,7 +10,7 @@ import sql_data_client as sdc
 import sql_statistics_client as stc
 from pathlib import Path
 from sql_access_errors import access
-from fastapi import FastAPI, Request, UploadFile
+from fastapi import FastAPI, Request, UploadFile, File, Form
 from sqlalchemy import delete, insert, func, asc
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql.expression import desc
@@ -1228,8 +1228,8 @@ async def statistics_type_map(request: Request):
 
 
 @app.post("/account/add/game")
-async def account_add_game(request: Request, token: str, game_name: str, game_short_desc: str, game_desc: str,
-                           game_type: str = "game", game_logo: str = ""):
+async def account_add_game(request: Request, token: str, game_name: str = Form(...), game_short_desc: str = Form(...),
+                           game_desc: str = Form(...), game_type: str = Form("game"), game_logo: str = Form("")):
     """
     Добавляет игры в базу.
 
@@ -1266,7 +1266,7 @@ async def account_add_game(request: Request, token: str, game_name: str, game_sh
 
 
 @app.post("/account/add/genre")
-async def account_add_genre(request: Request, token: str, genre_name: str):
+async def account_add_genre(request: Request, token: str, genre_name: str = Form(...)):
     """
     Добавляет жанры в базу.
 
@@ -1291,7 +1291,7 @@ async def account_add_genre(request: Request, token: str, genre_name: str):
 
 
 @app.post("/account/add/tag")
-async def account_add_tag(request: Request, token: str, tag_name: str):
+async def account_add_tag(request: Request, token: str, tag_name: str = Form(...)):
     """
     Добавляет теги в базу.
 
@@ -1316,8 +1316,8 @@ async def account_add_tag(request: Request, token: str, tag_name: str):
 
 
 @app.post("/account/add/resource")
-async def account_add_resource(request: Request, token: str, resource_type_name: str, resource_url: str,
-                               resource_owner_id: int):
+async def account_add_resource(request: Request, token: str, resource_type_name: str = Form(...),
+                               resource_url: str = Form(...), resource_owner_id: int = Form(...)):
     """
     Добавляет ресурсы модов в базу.
 
@@ -1349,8 +1349,10 @@ async def account_add_resource(request: Request, token: str, resource_type_name:
 
 
 @app.post("/account/add/mod")
-async def account_add_mod(request: Request, token: str, mod_name: str, mod_short_description: str,
-                          mod_description: str, mod_source: str, mod_game: int, mod_public: int, mod_file: UploadFile):
+async def account_add_mod(request: Request, token: str, mod_name: str = Form(...),
+                          mod_short_description: str = Form(...), mod_description: str = Form(...),
+                          mod_source: str = Form(...), mod_game: int = Form(...), mod_public: int = Form(...),
+                          mod_file: UploadFile = File(...)):
     """
     Добавляет моды в базу.
     Ограничение на архив - 800МБ. Ограничения на не сжатый размер мода нет.
@@ -1427,9 +1429,9 @@ async def account_add_mod(request: Request, token: str, mod_name: str, mod_short
 
 
 @app.post("/account/edit/game")
-async def account_edit_game(request: Request, token: str, game_id: int, game_name: str = None,
-                            game_short_desc: str = None, game_desc: str = None, game_type: str = None,
-                            game_logo: str = None, game_source: str = None):
+async def account_edit_game(request: Request, token: str, game_id: int, game_name: str = Form(None),
+                            game_short_desc: str = Form(None), game_desc: str = Form(None), game_type: str = Form(None),
+                            game_logo: str = Form(None), game_source: str = Form(None)):
     """
     Изменяет игры в базе. Принимает обязательно ID игры.
 
@@ -1469,7 +1471,7 @@ async def account_edit_game(request: Request, token: str, game_id: int, game_nam
 
 
 @app.post("/account/edit/genre")
-async def account_edit_genre(request: Request, token: str, genre_id: int, genre_name: str = None):
+async def account_edit_genre(request: Request, token: str, genre_id: int, genre_name: str = Form(None)):
     """
     Изменяет жанр в базе. Принимает обязательно ID жанра.
 
@@ -1500,7 +1502,7 @@ async def account_edit_genre(request: Request, token: str, genre_id: int, genre_
 
 
 @app.post("/account/edit/tag")
-async def account_edit_tag(request: Request, token: str, tag_id: int, tag_name: str = None):
+async def account_edit_tag(request: Request, token: str, tag_id: int, tag_name: str = Form(None)):
     """
     Изменяет теги в базе. Принимает обязательно ID тега.
 
@@ -1530,8 +1532,8 @@ async def account_edit_tag(request: Request, token: str, tag_id: int, tag_name: 
 
 
 @app.post("/account/edit/resource")
-async def account_edit_resource(request: Request, token: str, resource_id: int, resource_type: str = None,
-                                resource_url: str = None, resource_owner_id: int = None):
+async def account_edit_resource(request: Request, token: str, resource_id: int, resource_type: str = Form(None),
+                                resource_url: str = Form(None), resource_owner_id: int = Form(None)):
     """
     Изменяет ресурс мода в базе. Принимает обязательно ID ресурса.
 
@@ -1567,9 +1569,10 @@ async def account_edit_resource(request: Request, token: str, resource_id: int, 
 
 
 @app.post("/account/edit/mod")
-async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: str = None,
-                           mod_short_description: str = None, mod_description: str = None, mod_source: str = None,
-                           mod_game: int = None, mod_public: int = None, mod_file: UploadFile = None):
+async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: str = Form(None),
+                           mod_short_description: str = Form(None), mod_description: str = Form(None),
+                           mod_source: str = Form(None), mod_game: int = Form(None), mod_public: int = Form(None),
+                           mod_file: UploadFile = File(None)):
     """
     Изменяет моды в базе. Принимает обязательно ID мода.
     Ограничение на архив - 800МБ. Ограничения на не сжатый размер мода нет.
