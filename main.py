@@ -216,9 +216,15 @@ async def mod_dowloader_request(request: Request, mod_id: int, token: str = None
         # Выполнение операции INSERT
         session.execute(insert_statement)
     else:
-        session.query(sdc.Mod).filter_by(id=int(mod['publishedfileid'])).update(
-            {'condition': 3, "date_request": datetime.now(),
-             "date_update": datetime.fromtimestamp(mod['time_updated'])})
+        session.query(sdc.Mod).filter_by(id=int(mod['publishedfileid'])).update({
+            "condition": 3,
+            "date_request": datetime.now(),
+            "date_update": datetime.fromtimestamp(mod['time_updated']),
+            "short_description": tool.truncate_text(text=mod['description']),
+            "description": mod['description'],
+            "size": mod['file_size'],
+            "name": mod['title']
+        })
     session.commit()
 
     todo_download[mod_id] = [mod, wait_time, updating]
@@ -375,9 +381,14 @@ async def mod_data_update(mod_id: int):
 
                     todo_download[mod_id] = [mod, wait_time, True]
 
-                    session.query(sdc.Mod).filter_by(id=mod_id).update(
-                        {'condition': 3, "date_update": datetime.fromtimestamp(mod['time_updated'])}
-                    )
+                    session.query(sdc.Mod).filter_by(id=mod_id).update({
+                        "condition": 3,
+                        "date_update": datetime.fromtimestamp(mod['time_updated']),
+                        "short_description": tool.truncate_text(text=mod['description']),
+                        "description": mod['description'],
+                        "size": mod['file_size'],
+                        "name": mod['title']
+                    })
                     session.commit()
 
                     session.close()
