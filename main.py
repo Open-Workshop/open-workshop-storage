@@ -1649,9 +1649,13 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
             data_edit["size"] = await tool.calculate_uncompressed_size(file_path=archive_standart)
 
         Path(f"mods/{mod_game}").mkdir(parents=True, exist_ok=True)
-        os.replace(src=archive_standart, dst=f"mods/{mod_game}/{mod_id}.zip")
+        result_replace = os.replace(src=archive_standart, dst=f"mods/{mod_data.game}/{mod_id}.zip")
+        print(f'Mod update (mod_file): Результат переноса в постоянное хранилище: {result_replace}', flush=True)
 
-
+    if mod_game:
+        Path(f"mods/{mod_game}").mkdir(parents=True, exist_ok=True)
+        result_replace = os.replace(src=f"mods/{mod_data.game}/{mod_id}.zip", dst=f"mods/{mod_game}/{mod_id}.zip")
+        print(f'Mod update (game): Результат переноса в постоянное хранилище: {result_replace}', flush=True)
 
     if len(data_edit) <= 0:
         return JSONResponse(status_code=418, content="The request is empty")
