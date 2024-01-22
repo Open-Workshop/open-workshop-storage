@@ -922,6 +922,9 @@ async def mod_info(request: Request, mod_id: int, token: str = None, dependencie
     query = query.filter(sdc.Mod.id == mod_id)
     output["pre_result"] = query.first()
 
+    if not output["pre_result"]:
+        return JSONResponse(status_code=404, content="Mod not found.")
+
     if output["pre_result"].public >= 2:
         if not await access(request=request, user_token=token, real_token=config.token_info_mod, func_name="info mod"):
             session.close()
