@@ -1651,7 +1651,7 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
             data_edit["date_update"] = datetime.now()
             data_edit["size"] = await tool.calculate_uncompressed_size(file_path=archive_standart)
 
-        Path(f"mods/{mod_game}").mkdir(parents=True, exist_ok=True)
+        Path(f"mods/{mod_data.game}").mkdir(parents=True, exist_ok=True)
         result_replace = os.replace(src=archive_standart, dst=f"mods/{mod_data.game}/{mod_id}.zip")
         print(f'Mod update (mod_file): Результат переноса в постоянное хранилище: {result_replace}', flush=True)
 
