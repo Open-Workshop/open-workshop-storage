@@ -827,6 +827,52 @@ async def list_resources_mods(request: Request, mods_list_id, token: str = None,
     return {"database_size": resources_count, "offset": offset, "results": resources}
 
 
+@app.get("/list/resources/{resources_list_id}")
+async def list_resources_mods(request: Request, resources_list_id, token: str = None):
+    """
+    Возвращает список ресурсов по их id. Список в размере не должен быть > 80!
+    Если в переданном списке ресурсов есть ID привязанное к непубличному моду, то будет отказано в доступе!
+    """
+    stc.update("/list/resources/")
+
+    resources_list_id = tool.str_to_list(resources_list_id)
+
+    if len(resources_list_id) > 80:
+        return JSONResponse(status_code=413,
+                            content={"message": "the maximum complexity of filters is 80 elements in sum",
+                                     "error_id": 2})
+
+    # Создание сессии
+    Session = sessionmaker(bind=sdc.engine)
+    session = Session()
+
+    # Выполнение запроса
+    query = session.query(sdc.ResourceMod)
+    query = query.filter(sdc.ResourceMod.id.in_(resources_list_id))
+
+    resources_count = query.count()
+    resources = query.all()
+
+    # Проверка правомерности
+    if resources_count > 0:
+        mods_ids_check = []
+        for i in resources:
+            mods_ids_check.append(i.owner_id)
+
+        query = session.query(sdc.Mod.id)
+        query = query.filter(sdc.Mod.id.in_(mods_ids_check))
+        query = query.filter(sdc.Mod.public >= 2)
+
+        if len(query.all()) > 0:
+            if not await access(request=request, user_token=token, real_token=config.token_info_mod, func_name="resources list"):
+                session.close()
+                return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    # Возврат успешного результата
+    session.close()
+    return {"database_size": resources_count, "results": resources}
+
+
 @app.get("/info/game/{game_id}")
 async def game_info(game_id: int, short_description: bool = False, description: bool = False, dates: bool = False,
                     statistics: bool = False):
