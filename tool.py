@@ -8,8 +8,12 @@ from datetime import datetime
 from sqlalchemy.sql.expression import desc
 
 
-def zipping(game_id: int, mod_id: int, target_size: int) -> bool: \
-        # Запаковываем сохраненный мод в архив (для экономии места и трафика)
+# Запаковываем сохраненный мод в архив (для экономии места и трафика)
+def zipping(game_id: int, mod_id: int, target_size: int) -> bool:
+    game_id = int(game_id)
+    mod_id = int(mod_id)
+    target_size = int(target_size)
+
     directory_path = f"steamapps/workshop/content/{game_id}/{mod_id}"  # Укажите путь к вашей папке
     zip_path = f"steamapps/workshop/content/{game_id}/{mod_id}.zip"  # Укажите путь к ZIP-архиву, который вы хотите создать
 
@@ -34,8 +38,8 @@ def zipping(game_id: int, mod_id: int, target_size: int) -> bool: \
     # Удаление исходной папки и её содержимого
     shutil.rmtree(directory_path)
 
-    print(f"mod size target {target_size}")
-    print(f"mod size total  {total_size}")
+    print(f"mod size target {target_size} {type(target_size)}")
+    print(f"mod size total  {total_size} {type(total_size)}")
 
     # Проверяем полностью ли установился мод
     if total_size != target_size or target_size <= 0:
