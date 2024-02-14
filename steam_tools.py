@@ -59,28 +59,19 @@ def get_html_data(id:int):
             soup = BeautifulSoup(response.content, 'html.parser')
 
             # Находим все элементы <a> с классом 'highlight_screenshot_link'
-            screenshot_links = soup.find_all('div', class_="screenshot_holder")#class_='highlight_player_item highlight_screenshot')
+            screenshot_links = str(soup.find('div', id="highlight_player_area").find('script'))#class_='highlight_player_item highlight_screenshot')
+
+            print(type(screenshot_links))
+
+            start_index = screenshot_links.find("rgFullScreenshotURLs") + len("rgFullScreenshotURLs") + 3
+            end_index = screenshot_links.find(";", start_index)
+            rgFullScreenshotURLs_dict = eval(screenshot_links[start_index:end_index])
+            print(start_index, end_index, rgFullScreenshotURLs_dict)
 
             #Извлекаем ссылки на скриншоты
-            for div in screenshot_links:
-                lin = div.find('a')
-                print(lin)
-
-                # Извлекаем значение атрибута onclick
-                onclick_value = lin.get('onclick')
-
-                # Ищем начальную и конечную позиции ссылки внутри значения атрибута onclick
-                start_index = onclick_value.find("'") + 1
-                end_index = onclick_value.rfind("'")
-
-                # Извлекаем ссылку
-                image_url = onclick_value[start_index:end_index]
-
-                #lin = lin['href']
-                #start_index = lin.find("'")+1
-                #lin = str(lin[start_index:lin.find("'", start_index)])
-                if image_url.startswith("https://"):
-                    result["screenshots"].append(image_url)
+            for element in rgFullScreenshotURLs_dict:
+                print(element)
+                result["screenshots"].append(element['url'])
         except:
             print(f"Ошибка! Не удалось получить скриншоты мода! ({id})")
     except:
