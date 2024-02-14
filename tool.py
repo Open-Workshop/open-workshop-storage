@@ -23,7 +23,7 @@ def zipping(game_id: int, mod_id: int, target_size: int) -> bool:
         return False
 
     total_size = 0
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_BZIP2) as zipf:
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_LZMA) as zipf:
         for root, dirs, files in os.walk(directory_path):
             for file in files:
                 file_path = os.path.join(root, file)
@@ -42,6 +42,7 @@ def zipping(game_id: int, mod_id: int, target_size: int) -> bool:
     print(f"mod size total  {total_size} {type(total_size)}")
 
     # Проверяем полностью ли установился мод
+    print(target_size, total_size, target_size==total_size, type(target_size), type(total_size))
     if total_size != target_size or target_size <= 0:
         os.remove(zip_path)
         return False
@@ -65,11 +66,11 @@ async def zip_standart(archive_path: str):
         # Проверяем, является ли архив архивом ZIP_BZIP2
         with zipfile.ZipFile(archive_path, "r") as archive:
             compression_type = archive.compression
-            if compression_type == zipfile.ZIP_BZIP2:
-                print("Архив уже заархивирован по стандарту ZIP_BZIP2")
+            if compression_type == zipfile.ZIP_LZMA:
+                print("Архив уже заархивирован по стандарту ZIP_LZMA")
                 return archive_path
             else:
-                print("Архив не заархивирован по стандарту ZIP_BZIP2")
+                print("Архив не заархивирован по стандарту ZIP_LZMA")
 
                 # Приводим архив к стандарту ZIP_BZIP2
                 new_archive_path = archive_path.replace(".zip", "_new.zip")
@@ -80,7 +81,7 @@ async def zip_standart(archive_path: str):
 
         os.remove(archive_path)
 
-        print("Архив успешно приведен к стандарту ZIP_BZIP2")
+        print("Архив успешно приведен к стандарту ZIP_LZMA")
         return new_archive_path
     except:
         os.remove(archive_path)
