@@ -631,7 +631,7 @@ async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNL
 
 
 @app.get("/list/tags/{game_id}")
-async def list_tags(game_id: int, page_size: int = 10, page: int = 0):
+async def list_tags(game_id: int, page_size: int = 10, page: int = 0, name: str = ''):
     """
     Возвращает список тегов закрепленных за игрой и её модами. Нужно передать ID интересующей игры.
 
@@ -649,6 +649,8 @@ async def list_tags(game_id: int, page_size: int = 10, page: int = 0):
     # Выполнение запроса
     query = session.query(sdc.ModTag)
     query = query.filter(sdc.ModTag.associated_games.any(sdc.Game.id == game_id))
+    if len(name) > 0:
+        query = query.filter(sdc.ModTag.name.ilike(f'%{name}%'))
 
     tags_count = query.count()
     offset = page_size * page
@@ -709,7 +711,7 @@ async def list_tags_for_mods(request: Request, mods_ids_list, token: str = None,
 
 
 @app.get("/list/genres")
-async def list_genres(page_size: int = 10, page: int = 0):
+async def list_genres(page_size: int = 10, page: int = 0, name: str = ''):
     """
     Возвращает список жанров для игр.
 
@@ -726,6 +728,8 @@ async def list_genres(page_size: int = 10, page: int = 0):
     session = Session()
     # Выполнение запроса
     query = session.query(sdc.Genres)
+    if len(name) > 0:
+        query = query.filter(sdc.Genres.name.ilike(f'%{name}%'))
 
     genres_count = query.count()
     offset = page_size * page
@@ -1667,9 +1671,9 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
     data_edit = {}
     if mod_name:
         data_edit["name"] = mod_name
-    if mod_short_description:
+    if mod_short_description is not None:
         data_edit["short_description"] = mod_short_description
-    if mod_description:
+    if mod_description is not None:
         data_edit["description"] = mod_description
     if mod_source:
         data_edit["source"] = mod_source
