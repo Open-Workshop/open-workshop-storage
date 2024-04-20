@@ -631,17 +631,21 @@ async def games_list(page_size: int = 10, page: int = 0, sort: str = "MODS_DOWNL
 
 
 @app.get("/list/tags/{game_id}")
-async def list_tags(game_id: int, page_size: int = 10, page: int = 0, name: str = ''):
+async def list_tags(game_id: int, page_size: int = 10, page: int = 0, name: str = '', tags_ids = []):
     """
     Возвращает список тегов закрепленных за игрой и её модами. Нужно передать ID интересующей игры.
 
     1. `page_size` - размер 1 страницы. Диапазон - 1...50 элементов.
     2. `page` - номер странице. Не должна быть отрицательной.
+    3. `name` - фильтрация по имени.
+    4. `tags_ids` - фильтрация по id тегов *(массив id)*.
     """
     stc.update("/list/tags/")
 
     if page_size > 50 or page_size < 1:
         return JSONResponse(status_code=413, content={"message": "incorrect page size", "error_id": 1})
+
+    tags_ids = tool.str_to_list(tags_ids)
 
     # Создание сессии
     Session = sessionmaker(bind=sdc.engine)
@@ -651,6 +655,9 @@ async def list_tags(game_id: int, page_size: int = 10, page: int = 0, name: str 
     query = query.filter(sdc.ModTag.associated_games.any(sdc.Game.id == game_id))
     if len(name) > 0:
         query = query.filter(sdc.ModTag.name.ilike(f'%{name}%'))
+
+    if len(tags_ids) > 0:
+        query = query.filter(sdc.ModTag.id.in_(tags_ids))
 
     tags_count = query.count()
     offset = page_size * page
