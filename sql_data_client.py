@@ -1,9 +1,10 @@
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Table, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
+from ow_config import user_sql, password_sql
 
 
-engine = create_engine('sqlite:///sql/database.db')
+engine = create_engine(f'mysql+mysqldb://{user_sql}:{password_sql}@localhost/catalog')
 base = declarative_base()
 
 

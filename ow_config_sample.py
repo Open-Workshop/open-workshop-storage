@@ -1,3 +1,9 @@
+# MySQL параметры
+
+password_sql = 'password'
+user_sql = 'user'
+
+
 # Хеши токенов
 
 
