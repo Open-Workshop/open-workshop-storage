@@ -474,11 +474,6 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     query = query.filter(sdc.Mod.condition == 0)
     query = query.filter(sdc.Mod.public == 0)
 
-    # Фильтрация по тегам
-    if len(tags) > 0:
-        for tag_id in tags:
-            query = query.filter(sdc.Mod.tags.any(sdc.ModTag.id == tag_id))
-
     # Фильтрация по конкретным ID
     if len(allowed_ids) > 0:
         query = query.filter(sdc.Mod.id.in_(allowed_ids))
@@ -499,6 +494,11 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
     if len(name) > 0:
         print(len(name))
         query = query.filter(sdc.Mod.name.ilike(f'%{name}%'))
+
+    # Фильтрация по тегам
+    if len(tags) > 0:
+        for tag_id in tags:
+            query = query.filter(sdc.Mod.tags.any(sdc.ModTag.id == tag_id))
 
     mods_count = query.count()
 
