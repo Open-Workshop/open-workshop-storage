@@ -497,8 +497,7 @@ async def mod_list(page_size: int = 10, page: int = 0, sort: str = "DOWNLOADS", 
 
     # Фильтрация по тегам
     if len(tags) > 0:
-        for tag_id in tags:
-            query = query.filter(sdc.Mod.tags.any(sdc.ModTag.id == tag_id))
+        query = query.filter(sdc.Mod.tags.any(sdc.ModTag.id.in_(tags)))
 
     mods_count = query.count()
 
