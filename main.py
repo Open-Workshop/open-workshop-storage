@@ -1315,6 +1315,8 @@ async def account_add_game(request: Request, token: str, game_name: str = Form(.
     if not await access(request=request, user_token=token, real_token=config.token_add_game, func_name="add game"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
+    session = sessionmaker(bind=sdc.engine)()
+
     insert_statement = insert(sdc.Game).values(
         name=game_name,
         type=game_type,
@@ -1325,10 +1327,10 @@ async def account_add_game(request: Request, token: str, game_name: str = Form(.
         mods_count=0,
         creation_date=datetime.now(),
         source='local'
-    ).returning(sdc.Game.id)
+    )
 
     result = session.execute(insert_statement)
-    id = result.fetchone()[0]  # Получаем значение `id` созданного элемента
+    id = result.lastrowid  # Получаем ID последней вставленной строки
 
     session.commit()
     session.close()
@@ -1348,12 +1350,14 @@ async def account_add_genre(request: Request, token: str, genre_name: str = Form
     if not await access(request=request, user_token=token, real_token=config.token_add_genre, func_name="add genre"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
+    session = sessionmaker(bind=sdc.engine)()
+
     insert_statement = insert(sdc.Genres).values(
         name=genre_name
-    ).returning(sdc.Genres.id)
+    )
 
     result = session.execute(insert_statement)
-    id = result.fetchone()[0]  # Получаем значение `id` созданного элемента
+    id = result.lastrowid  # Получаем ID последней вставленной строки
 
     session.commit()
     session.close()
@@ -1373,12 +1377,14 @@ async def account_add_tag(request: Request, token: str, tag_name: str = Form(...
     if not await access(request=request, user_token=token, real_token=config.token_add_tag, func_name="add tag"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
+    session = sessionmaker(bind=sdc.engine)()
+
     insert_statement = insert(sdc.ModTag).values(
         name=tag_name
-    ).returning(sdc.ModTag.id)
+    )
 
     result = session.execute(insert_statement)
-    id = result.fetchone()[0]  # Получаем значение `id` созданного элемента
+    id = result.lastrowid  # Получаем ID последней вставленной строки
 
     session.commit()
     session.close()
@@ -1403,15 +1409,17 @@ async def account_add_resource(request: Request, token: str, resource_type_name:
     if not await access(request=request, user_token=token, real_token=config.token_add_resource, func_name="add resource"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
+    session = sessionmaker(bind=sdc.engine)()
+
     insert_statement = insert(sdc.ResourceMod).values(
         type=resource_type_name,
         url=resource_url,
         date_event=datetime.now(),
         owner_id=resource_owner_id
-    ).returning(sdc.ResourceMod.id)
+    )
 
     result = session.execute(insert_statement)
-    id = result.fetchone()[0]  # Получаем значение `id` созданного элемента
+    id = result.lastrowid  # Получаем ID последней вставленной строки
 
     session.commit()
     session.close()
@@ -1421,7 +1429,7 @@ async def account_add_resource(request: Request, token: str, resource_type_name:
 
 @app.post("/account/add/mod")
 async def account_add_mod(request: Request, token: str, mod_name: str = Form(...),
-                          mod_short_description: str = Form(...), mod_description: str = Form(...),
+                          mod_short_description: str = Form(''), mod_description: str = Form(''),
                           mod_source: str = Form(...), mod_game: int = Form(...), mod_public: int = Form(...),
                           mod_file: UploadFile = File(...)):
     """
@@ -1442,8 +1450,8 @@ async def account_add_mod(request: Request, token: str, mod_name: str = Form(...
 
     Возвращает ID созданного элемента.
     """
-    if not await access(request=request, user_token=token, real_token=config.token_add_mod, func_name="add mod"):
-        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+    #if not await access(request=request, user_token=token, real_token=config.token_add_mod, func_name="add mod"):
+    #    return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
     if mod_file.size >= 838860800:
         return JSONResponse(status_code=413, content="The file is too large.")
@@ -1452,6 +1460,8 @@ async def account_add_mod(request: Request, token: str, mod_name: str = Form(...
 
     if mod_public not in [0, 1, 2]:
         mod_public = 0
+
+    session = sessionmaker(bind=sdc.engine)()
 
     insert_statement = insert(sdc.Mod).values(
         name=mod_name,
@@ -1469,10 +1479,10 @@ async def account_add_mod(request: Request, token: str, mod_name: str = Form(...
         downloads=0,
 
         game=mod_game
-    ).returning(sdc.Mod.id)
+    )
 
     result = session.execute(insert_statement)
-    id = result.fetchone()[0]  # Получаем значение `id` созданного элемента
+    id = result.lastrowid  # Получаем ID последней вставленной строки
 
     session.commit()
 
@@ -1495,6 +1505,7 @@ async def account_add_mod(request: Request, token: str, mod_name: str = Form(...
     session.query(sdc.Mod).filter_by(id=id).update({'condition': 0, 'size': mod_size})
     session.query(sdc.Game).filter_by(id=mod_game).update({'mods_count': tool.get_mods_count(session=session, game_id=mod_game)})
     session.commit()
+    session.close()
 
     return JSONResponse(status_code=201, content=id)  # Возвращаем значение `id`
 
@@ -1512,6 +1523,8 @@ async def account_edit_game(request: Request, token: str, game_id: int, game_nam
     """
     if not await access(request=request, user_token=token, real_token=config.token_edit_game, func_name="edit game"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    session = sessionmaker(bind=sdc.engine)()
 
     game = session.query(sdc.Game).filter_by(id=game_id)
     if not game.first():
@@ -1538,6 +1551,7 @@ async def account_edit_game(request: Request, token: str, game_id: int, game_nam
     # Меняем данные в БД
     game.update(data_edit)
     session.commit()
+    session.close()
     return JSONResponse(status_code=202, content="Complite")
 
 
@@ -1552,6 +1566,8 @@ async def account_edit_genre(request: Request, token: str, genre_id: int, genre_
     """
     if not await access(request=request, user_token=token, real_token=config.token_edit_genre, func_name="edit genre"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    session = sessionmaker(bind=sdc.engine)()
 
     game = session.query(sdc.Genres).filter_by(id=genre_id)
     if game.first():
@@ -1569,6 +1585,7 @@ async def account_edit_genre(request: Request, token: str, genre_id: int, genre_
     game = session.query(sdc.Genres).filter_by(id=genre_id)
     game.update(data_edit)
     session.commit()
+    session.close()
     return JSONResponse(status_code=202, content="Complite")
 
 
@@ -1583,6 +1600,8 @@ async def account_edit_tag(request: Request, token: str, tag_id: int, tag_name: 
     """
     if not await access(request=request, user_token=token, real_token=config.token_edit_tag, func_name="edit tag"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    session = sessionmaker(bind=sdc.engine)()
 
     tag = session.query(sdc.ModTag).filter_by(id=tag_id)
     if not tag.first():
@@ -1599,6 +1618,7 @@ async def account_edit_tag(request: Request, token: str, tag_id: int, tag_name: 
     # Меняем данные в БД
     tag.update(data_edit)
     session.commit()
+    session.close()
     return JSONResponse(status_code=202, content="Complite")
 
 
@@ -1614,6 +1634,8 @@ async def account_edit_resource(request: Request, token: str, resource_id: int, 
     """
     if not await access(request=request, user_token=token, real_token=config.token_edit_resource, func_name="edit resource"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    session = sessionmaker(bind=sdc.engine)()
 
     resource = session.query(sdc.ResourceMod).filter_by(id=resource_id)
     if not resource.first():
@@ -1636,6 +1658,7 @@ async def account_edit_resource(request: Request, token: str, resource_id: int, 
     # Меняем данные в БД
     resource.update(data_edit)
     session.commit()
+    session.close()
     return JSONResponse(status_code=202, content="Complite")
 
 
@@ -1660,18 +1683,23 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
 
     Local функция!
     """
-    if not await access(request=request, user_token=token, real_token=config.token_edit_mod, func_name="edit mod"):
-        return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+    #if not await access(request=request, user_token=token, real_token=config.token_edit_mod, func_name="edit mod"):
+    #    return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    session = sessionmaker(bind=sdc.engine)()
 
     mod = session.query(sdc.Mod).filter_by(id=mod_id)
     mod_data = mod.first()
     if not mod_data:
+        session.close()
         return JSONResponse(status_code=404, content="The element does not exist.")
 
     if mod_file:
         if mod_file.size >= 838860800:
+            session.close()
             return JSONResponse(status_code=413, content="The file is too large.")
         elif not mod_file.filename.endswith(".zip"):
+            session.close()
             return JSONResponse(status_code=400, content="Only ZIP archives are accepted.")
 
     # Подготавливаем данные
@@ -1693,8 +1721,10 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
 
     if mod_file:
         if mod_file.size >= 838860800:
+            session.close()
             return JSONResponse(status_code=413, content="The file is too large.")
         elif not mod_file.filename.endswith(".zip"):
+            session.close()
             return JSONResponse(status_code=400, content="Only ZIP archives are accepted.")
 
         file_path = f"users_files_processing/{mod_id}.zip"
@@ -1703,6 +1733,7 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
 
         archive_standart = await tool.zip_standart(archive_path=file_path)
         if len(archive_standart) <= 0:
+            session.close()
             return JSONResponse(status_code=500, content="An unknown error occurred while checking the archive standard.")
         else:
             data_edit["date_update"] = datetime.now()
@@ -1718,6 +1749,7 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
         print(f'Mod update (game): Результат переноса в постоянное хранилище: {result_replace}', flush=True)
 
     if len(data_edit) <= 0:
+        session.close()
         return JSONResponse(status_code=418, content="The request is empty")
 
     data_edit["date_request"] = datetime.now()
@@ -1730,6 +1762,8 @@ async def account_edit_mod(request: Request, token: str, mod_id: int, mod_name: 
         session.query(sdc.Game).filter_by(id=mod_game_before).update({'mods_count': tool.get_mods_count(session=session, game_id=mod_game_before)})
         session.query(sdc.Game).filter_by(id=mod_game).update({'mods_count': tool.get_mods_count(session=session, game_id=mod_game)})
         session.commit()
+
+    session.close()
 
     return JSONResponse(status_code=202, content="Complite")
 
@@ -1747,6 +1781,8 @@ async def account_delete_game(request: Request, token: str, game_id: int):
     if not await access(request=request, user_token=token, real_token=config.token_delete_game, func_name="delete game"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
+    session = sessionmaker(bind=sdc.engine)()
+
     delete_game = delete(sdc.Game).where(sdc.Game.id == game_id)
 
     delete_genres_association = sdc.game_genres.delete().where(sdc.game_genres.c.game_id == game_id)
@@ -1757,6 +1793,7 @@ async def account_delete_game(request: Request, token: str, game_id: int):
     session.execute(delete_genres_association)
     session.execute(delete_tags_association)
     session.commit()
+    session.close()
 
     return JSONResponse(status_code=202, content="Complite")
 
@@ -1773,6 +1810,8 @@ async def account_delete_genre(request: Request, token: str, genre_id: int):
     if not await access(request=request, user_token=token, real_token=config.token_delete_genre, func_name="delete genre"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
+    session = sessionmaker(bind=sdc.engine)()
+
     delete_game = delete(sdc.Genres).where(sdc.Genres.id == genre_id)
 
     delete_genres_association = sdc.game_genres.delete().where(sdc.game_genres.c.genre_id == genre_id)
@@ -1781,6 +1820,7 @@ async def account_delete_genre(request: Request, token: str, genre_id: int):
     session.execute(delete_game)
     session.execute(delete_genres_association)
     session.commit()
+    session.close()
     return JSONResponse(status_code=202, content="Complite")
 
 
@@ -1796,6 +1836,8 @@ async def account_delete_tag(request: Request, token: str, tag_id: int):
     if not await access(request=request, user_token=token, real_token=config.token_delete_tag, func_name="delete tag"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
+    session = sessionmaker(bind=sdc.engine)()
+
     delete_game = delete(sdc.ModTag).where(sdc.ModTag.id == tag_id)
 
     delete_mods_tags_association = sdc.mods_tags.delete().where(sdc.mods_tags.c.tag_id == tag_id)
@@ -1806,6 +1848,7 @@ async def account_delete_tag(request: Request, token: str, tag_id: int):
     session.execute(delete_mods_tags_association)
     session.execute(delete_game_tags_association)
     session.commit()
+    session.close()
     return JSONResponse(status_code=202, content="Complite")
 
 
@@ -1819,11 +1862,14 @@ async def account_delete_resource(request: Request, token: str, resource_id: int
     if not await access(request=request, user_token=token, real_token=config.token_delete_resource, func_name="delete resource"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
+    session = sessionmaker(bind=sdc.engine)()
+
     delete_resource = delete(sdc.ResourceMod).where(sdc.ResourceMod.id == resource_id)
 
     # Выполнение операции DELETE
     session.execute(delete_resource)
     session.commit()
+    session.close()
     return JSONResponse(status_code=202, content="Complite")
 
 
@@ -1839,6 +1885,8 @@ async def account_delete_mod(request: Request, token: str, mod_id: int):
     """
     if not await access(request=request, user_token=token, real_token=config.token_delete_mod, func_name="delete mod"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
+
+    session = sessionmaker(bind=sdc.engine)()
 
     try:
         query_game = session.query(sdc.Mod.game).filter(sdc.Mod.id == mod_id).first().game
@@ -1862,9 +1910,12 @@ async def account_delete_mod(request: Request, token: str, mod_id: int):
         if session.query(sdc.Game).filter_by(id=query_game).first():
             session.query(sdc.Game).filter_by(id=query_game).update({'mods_count': tool.get_mods_count(session=session, game_id=query_game)})
         session.commit()
+        session.close()
 
         return JSONResponse(status_code=202, content="Complite")
     except:
+        session.rollback()
+        session.close()
         return JSONResponse(status_code=500, content="Error")
 
 
@@ -1880,14 +1931,18 @@ async def account_association_game_genre(request: Request, token: str, game_id: 
     if not await access(request=request, user_token=token, real_token=config.token_association_game_genre, func_name="association game genre"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
+    session = sessionmaker(bind=sdc.engine)()
+
     if mode:
         output = session.query(sdc.game_genres).filter_by(game_id=game_id, genre_id=genre_id).first()
         if output is None:
             insert_statement = insert(sdc.game_genres).values(game_id=game_id, genre_id=genre_id)
             session.execute(insert_statement)
             session.commit()
+            session.close()
             return JSONResponse(status_code=202, content="Complite")
         else:
+            session.close()
             return JSONResponse(status_code=409, content="The association is already present")
     else:
         delete_genre_association = sdc.game_genres.delete().where(sdc.game_genres.c.game_id == game_id,
@@ -1896,6 +1951,7 @@ async def account_association_game_genre(request: Request, token: str, game_id: 
         # Выполнение операции DELETE
         session.execute(delete_genre_association)
         session.commit()
+        session.close()
         return JSONResponse(status_code=202, content="Complite")
 
 
@@ -1911,14 +1967,18 @@ async def account_association_game_tag(request: Request, token: str, game_id: in
     if not await access(request=request, user_token=token, real_token=config.token_association_game_tag, func_name="association game tag"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
+    session = sessionmaker(bind=sdc.engine)()
+
     if mode:
         output = session.query(sdc.allowed_mods_tags).filter_by(game_id=game_id, tag_id=tag_id).first()
         if output is None:
             insert_statement = insert(sdc.allowed_mods_tags).values(game_id=game_id, tag_id=tag_id)
             session.execute(insert_statement)
             session.commit()
+            session.close()
             return JSONResponse(status_code=202, content="Complite")
         else:
+            session.close()
             return JSONResponse(status_code=409, content="The association is already present")
     else:
         delete_tags_association = sdc.allowed_mods_tags.delete().where(sdc.allowed_mods_tags.c.game_id == game_id,
@@ -1927,6 +1987,7 @@ async def account_association_game_tag(request: Request, token: str, game_id: in
         # Выполнение операции DELETE
         session.execute(delete_tags_association)
         session.commit()
+        session.close()
         return JSONResponse(status_code=202, content="Complite")
 
 
@@ -1942,14 +2003,18 @@ async def account_association_mod_tag(request: Request, token: str, mod_id: int,
     if not await access(request=request, user_token=token, real_token=config.token_association_mod_tag, func_name="association mod tag"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
+    session = sessionmaker(bind=sdc.engine)()
+
     if mode:
         output = session.query(sdc.mods_tags).filter_by(mod_id=mod_id, tag_id=tag_id).first()
         if output is None:
             insert_statement = insert(sdc.mods_tags).values(mod_id=mod_id, tag_id=tag_id)
             session.execute(insert_statement)
             session.commit()
+            session.close()
             return JSONResponse(status_code=202, content="Complite")
         else:
+            session.close()
             return JSONResponse(status_code=409, content="The association is already present")
     else:
         delete_tags_association = sdc.mods_tags.delete().where(sdc.mods_tags.c.mod_id == mod_id,
@@ -1958,6 +2023,7 @@ async def account_association_mod_tag(request: Request, token: str, mod_id: int,
         # Выполнение операции DELETE
         session.execute(delete_tags_association)
         session.commit()
+        session.close()
         return JSONResponse(status_code=202, content="Complite")
 
 
@@ -1973,14 +2039,18 @@ async def account_association_mod_dependencie(request: Request, token: str, mod_
     if not await access(request=request, user_token=token, real_token=config.token_association_mod_dependencie, func_name="association mod dependencie"):
         return JSONResponse(status_code=403, content="Access denied. This case will be reported.")
 
+    session = sessionmaker(bind=sdc.engine)()
+
     if mode:
         output = session.query(sdc.mods_dependencies).filter_by(mod_id=mod_id, dependence=dependencie).first()
         if output is None:
             insert_statement = insert(sdc.mods_dependencies).values(mod_id=mod_id, dependence=dependencie)
             session.execute(insert_statement)
             session.commit()
+            session.close()
             return JSONResponse(status_code=202, content="Complite")
         else:
+            session.close()
             return JSONResponse(status_code=409, content="The association is already present")
     else:
         delete_dependence_association = sdc.mods_dependencies.delete().where(sdc.mods_dependencies.c.mod_id == mod_id,
@@ -1989,6 +2059,7 @@ async def account_association_mod_dependencie(request: Request, token: str, mod_
         # Выполнение операции DELETE
         session.execute(delete_dependence_association)
         session.commit()
+        session.close()
         return JSONResponse(status_code=202, content="Complite")
 
 
