@@ -1,11 +1,15 @@
 import os
 import shutil
+import aiohttp
+import tools
+import ow_config as config
 from zipfile import ZipFile, ZIP_LZMA
 from fastapi import FastAPI, Request, UploadFile, Form
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 
 MAIN_DIR = 'storage'
+MANAGER_URL = 'http://127.0.0.1:8000'
 
 
 # Создание приложения
@@ -35,13 +39,21 @@ async def modify_header(request: Request, call_next):
     status_code=200,
     response_class=FileResponse,
     responses={
+        200: {
+            "description": "File send successfully",
+            "content": {"application/octet-stream": {}},
+        },
+        403: {
+            "description": "Access denied",
+            "content": {"text/plain": {'example': 'Access denied'}}
+        },
         404: {
             "description": "File not found on server",
             "content": {"text/plain": {'example': 'File not found'}}
         },
-        200: {
-            "description": "File send successfully",
-            "content": {"application/octet-stream": {}},
+        503: {
+            "description": "Manager unavailable",
+            "content": {"text/plain": {'example': 'Manager unavailable'}}
         }
     },
 )
@@ -49,10 +61,28 @@ async def download(request: Request, type: str, filename: str):
     """
     Возвращает запрашиваемый файл, если он существует.
     """
-    path = f"{MAIN_DIR}/{type}/{filename.replace('%2', '/')}"
+    filename = filename.replace('%2', '/')
+    path = f"{MAIN_DIR}/{type}/{filename}"
     
     if os.path.exists(path):
-        return FileResponse(path)
+        if type == 'archive' and filename.startswith('mod/'):
+            # Асинхронно спрашиваем у Manager правомерность доступа к файлу
+            async with aiohttp.ClientSession() as session:
+                id = int(filename.split('/')[1])
+                user = request.cookies.get('userID', 0)
+                async with session.get(f"{MANAGER_URL}/list/mods/access/[{id}]?token={config.check_access}&user={user}") as resp:
+                    if resp.status == 200:
+                        # Возвращает такой же список, проверяем, есть ли в нем интересующий нас ID
+                        data = await resp.json()
+                        if id in data:
+                            # Если есть, то возвращаем сам файл
+                            return FileResponse(path)
+                        else:
+                            return PlainTextResponse(status_code=403, content="Access denied")
+                    else:
+                        return PlainTextResponse(status_code=503, content="Manager unavailable")
+        else:
+            return FileResponse(path)
     else:
         return PlainTextResponse(status_code=404, content="File not found")
 
@@ -71,7 +101,7 @@ async def download(request: Request, type: str, filename: str):
 )
 async def upload(request: Request, token: str, file: UploadFile, type: str = Form(), filename: str = Form()):
     """
-    Загружает файл в Steam Workshop (микросервис хранения, функция управляется другим микросервисов).
+    Загружает файл в Storage (микросервис хранения, функция управляется другим микросервисов).
 
     type: Тип файла. Поддерживает следующие значения: img, archive. От этого зависит ключевая директория и доп. действия предпринимаемые сервером.
 
@@ -84,44 +114,45 @@ async def upload(request: Request, token: str, file: UploadFile, type: str = For
     if not os.path.exists(os.path.dirname(path)):
         os.makedirs(os.path.dirname(path))
 
-    if type == "archive":
-        # Если передан просто файл, то конвертируем его в архив
-        if not filename.endswith(".zip"):
-            # Создаем временный файл для архива
-            tmp_path = f"{MAIN_DIR}/{type}/{filename}.tmp"
-            # Сохраняем файл в временный файл
-            with open(tmp_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-            
-            # Валидируем путь (расширение в конце заменяем)
-            if '.' in path:
-                # Удалем все что после точки
-                path = path[:path.rindex('.')]
-            path += '.zip'
+    match type:
+        case "archive":
+            # Если передан просто файл, то конвертируем его в архив
+            if not filename.endswith(".zip"):
+                # Создаем временный файл для архива
+                tmp_path = f"{MAIN_DIR}/{type}/{filename}.tmp"
+                # Сохраняем файл в временный файл
+                with open(tmp_path, "wb") as buffer:
+                    shutil.copyfileobj(file.file, buffer)
 
-            if '.' not in filename:
-                filename += '.'+file.filename.split('.')[-1]
+                # Валидируем путь (расширение в конце заменяем)
+                if '.' in path:
+                    # Удалем все что после точки
+                    path = path[:path.rindex('.')]
+                path += '.zip'
 
-            # Создаем архив
-            with ZipFile(path, "w", compression=ZIP_LZMA, compresslevel=9) as zipped:
-                zipped.write(tmp_path, filename.split('/')[-1])
-            # Удаляем временный файл
-            os.remove(tmp_path)
+                if '.' not in filename:
+                    filename += '.'+file.filename.split('.')[-1]
 
-            # Удаляем из начала "{MAIN_DIR}/{type}/"
-            path = path.replace(f"{MAIN_DIR}/{type}/", "")
-            return path
-        # Если передан архив, то просто сохраняем
-        else:
-            # Сохраняем архив
+                # Создаем архив
+                with ZipFile(path, "w", compression=ZIP_LZMA, compresslevel=9) as zipped:
+                    zipped.write(tmp_path, filename.split('/')[-1])
+                # Удаляем временный файл
+                os.remove(tmp_path)
+
+                # Удаляем из начала "{MAIN_DIR}/{type}/"
+                path = path.replace(f"{MAIN_DIR}/{type}/", "")
+                return path
+            # Если передан архив, то просто сохраняем
+            else:
+                # Сохраняем архив
+                with open(path, "wb") as buffer:
+                    shutil.copyfileobj(file.file, buffer)
+                return filename
+        case _:
+            # Сохраняем файл
             with open(path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             return filename
-    else:
-        # Сохраняем файл
-        with open(path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        return filename
 
 @app.delete(
     "/delete",
@@ -158,7 +189,7 @@ async def delete(request: Request, token: str, type: str = Form(), filename: str
             file_path (str): The path of the file to be deleted.
 
         Returns:
-            None
+            JSONResponse
         """
         # Если файл не существует, то ничего не делаем
         if not os.path.isfile(file_path):
