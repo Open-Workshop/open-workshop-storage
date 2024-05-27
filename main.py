@@ -107,6 +107,9 @@ async def upload(request: Request, token: str, file: UploadFile, type: str = For
 
     filename: Имя файла. В формате "директории/поддиректории/имя.файла". Если под папок нет существует, то они создаются.
     """
+    if not tools.check_token('upload_file', token):
+        return PlainTextResponse(status_code=403, content="Access denied")
+
     path = f"{MAIN_DIR}/{type}/{filename}"
     # Удаляем из пути файл
     filename = filename.split('/')[-1]
@@ -180,6 +183,10 @@ async def delete(request: Request, token: str, type: str = Form(), filename: str
 
     Если после удаления файла, папка пуста, то она тоже удаляется (так же происходит со всеми родительскими папками)
     """
+    if not tools.check_token('delete_file', token):
+        return PlainTextResponse(status_code=403, content="Access denied")
+
+
     # Функция которая удаляет файл и после этого рекурсивно удаляет все родительские папки, если они пусты
     def delete_file_and_parent_folders(file_path: str):
         """
