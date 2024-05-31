@@ -35,7 +35,7 @@ async def modify_header(request: Request, call_next):
 
 
 @app.get(
-    "/download/{type}/{filename:path}",
+    "/download/{type}/{path:path}",
     status_code=200,
     response_class=FileResponse,
     responses={
@@ -57,18 +57,18 @@ async def modify_header(request: Request, call_next):
         }
     },
 )
-async def download(request: Request, type: str, filename: str):
+async def download(request: Request, type: str, path: str):
     """
     Возвращает запрашиваемый файл, если он существует.
     """
-    filename = filename.replace('%2', '/')
-    real_path = f"{MAIN_DIR}/{type}/{filename}"
+    path = path.replace('%2', '/')
+    real_path = f"{MAIN_DIR}/{type}/{path}"
     
     if os.path.exists(real_path):
-        if type == 'archive' and filename.startswith('mod/'):
+        if type == 'archive' and path.startswith('mod/'):
             # Асинхронно спрашиваем у Manager правомерность доступа к файлу
             async with aiohttp.ClientSession() as session:
-                id = int(filename.split('/')[1])
+                id = int(path.split('/')[1])
                 user = request.cookies.get('userID', 0)
                 async with session.get(f"{MANAGER_URL}/list/mods/access/[{id}]?token={config.check_access}&user={user}") as resp:
                     if resp.status == 200:
@@ -99,20 +99,20 @@ async def download(request: Request, type: str, filename: str):
         },
     }
 )
-async def upload(request: Request, token: str, file: UploadFile, type: str = Form(), filename: str = Form()):
+async def upload(request: Request, token: str, file: UploadFile, type: str = Form(), path: str = Form()):
     """
     Загружает файл в Storage (микросервис хранения, функция управляется другим микросервисов).
 
     type: Тип файла. Поддерживает следующие значения: img, archive. От этого зависит ключевая директория и доп. действия предпринимаемые сервером.
 
-    filename: Имя файла. В формате "директории/поддиректории/имя.файла". Если под папок нет существует, то они создаются.
+    path: Путь и имя файла. В формате "директории/поддиректории/имя.файла". Если под папок нет существует, то они создаются.
     """
     if not tools.check_token('upload_file', token):
         return PlainTextResponse(status_code=403, content="Access denied")
 
-    real_path = f"{MAIN_DIR}/{type}/{filename}"
+    real_path = f"{MAIN_DIR}/{type}/{path}"
     # Удаляем из пути файл
-    filename = filename.split('/')[-1]
+    path = path.split('/')[-1]
     # Проверяем существует ли директория, если нет, то создаем
     if not os.path.exists(os.path.dirname(real_path)):
         os.makedirs(os.path.dirname(real_path))
@@ -120,9 +120,9 @@ async def upload(request: Request, token: str, file: UploadFile, type: str = For
     match type:
         case "archive":
             # Если передан просто файл, то конвертируем его в архив
-            if not filename.endswith(".zip"):
+            if not path.endswith(".zip"):
                 # Создаем временный файл для архива
-                tmp_path = f"{MAIN_DIR}/{type}/{filename}.tmp"
+                tmp_path = f"{MAIN_DIR}/{type}/{path}.tmp"
                 # Сохраняем файл в временный файл
                 with open(tmp_path, "wb") as buffer:
                     shutil.copyfileobj(file.file, buffer)
@@ -133,12 +133,12 @@ async def upload(request: Request, token: str, file: UploadFile, type: str = For
                     real_path = real_path[:real_path.rindex('.')]
                 real_path += '.zip'
 
-                if '.' not in filename:
-                    filename += '.'+file.filename.split('.')[-1]
+                if '.' not in path:
+                    path += '.'+file.filename.split('.')[-1]
 
                 # Создаем архив
                 with ZipFile(real_path, "w", compression=ZIP_LZMA, compresslevel=9) as zipped:
-                    zipped.write(tmp_path, filename.split('/')[-1])
+                    zipped.write(tmp_path, path.split('/')[-1])
                 # Удаляем временный файл
                 os.remove(tmp_path)
 
@@ -150,12 +150,12 @@ async def upload(request: Request, token: str, file: UploadFile, type: str = For
                 # Сохраняем архив
                 with open(real_path, "wb") as buffer:
                     shutil.copyfileobj(file.file, buffer)
-                return filename
+                return path
         case _:
             # Сохраняем файл
             with open(real_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
-            return filename
+            return path
 
 @app.delete(
     "/delete",
@@ -175,7 +175,7 @@ async def upload(request: Request, token: str, file: UploadFile, type: str = For
         }
     },
 )
-async def delete(request: Request, token: str, type: str = Form(), filename: str = Form()):
+async def delete(request: Request, token: str, type: str = Form(), path: str = Form()):
     """
     Удаляет файл из Steam Workshop (микросервис хранения, функция управляется другим микросервисов).
 
@@ -219,4 +219,4 @@ async def delete(request: Request, token: str, type: str = Form(), filename: str
         
         return JSONResponse(status_code=200, content="File deleted")
 
-    return delete_file_and_parent_folders(f"{MAIN_DIR}/{type}/{filename}")
+    return delete_file_and_parent_folders(f"{MAIN_DIR}/{type}/{path}")
