@@ -62,9 +62,9 @@ async def download(request: Request, type: str, filename: str):
     Возвращает запрашиваемый файл, если он существует.
     """
     filename = filename.replace('%2', '/')
-    path = f"{MAIN_DIR}/{type}/{filename}"
+    real_path = f"{MAIN_DIR}/{type}/{filename}"
     
-    if os.path.exists(path):
+    if os.path.exists(real_path):
         if type == 'archive' and filename.startswith('mod/'):
             # Асинхронно спрашиваем у Manager правомерность доступа к файлу
             async with aiohttp.ClientSession() as session:
@@ -76,13 +76,13 @@ async def download(request: Request, type: str, filename: str):
                         data = await resp.json()
                         if id in data:
                             # Если есть, то возвращаем сам файл
-                            return FileResponse(path)
+                            return FileResponse(real_path)
                         else:
                             return PlainTextResponse(status_code=403, content="Access denied")
                     else:
                         return PlainTextResponse(status_code=503, content="Manager unavailable")
         else:
-            return FileResponse(path)
+            return FileResponse(real_path)
     else:
         return PlainTextResponse(status_code=404, content="File not found")
 
@@ -110,12 +110,12 @@ async def upload(request: Request, token: str, file: UploadFile, type: str = For
     if not tools.check_token('upload_file', token):
         return PlainTextResponse(status_code=403, content="Access denied")
 
-    path = f"{MAIN_DIR}/{type}/{filename}"
+    real_path = f"{MAIN_DIR}/{type}/{filename}"
     # Удаляем из пути файл
     filename = filename.split('/')[-1]
     # Проверяем существует ли директория, если нет, то создаем
-    if not os.path.exists(os.path.dirname(path)):
-        os.makedirs(os.path.dirname(path))
+    if not os.path.exists(os.path.dirname(real_path)):
+        os.makedirs(os.path.dirname(real_path))
 
     match type:
         case "archive":
@@ -128,32 +128,32 @@ async def upload(request: Request, token: str, file: UploadFile, type: str = For
                     shutil.copyfileobj(file.file, buffer)
 
                 # Валидируем путь (расширение в конце заменяем)
-                if '.' in path:
+                if '.' in real_path:
                     # Удалем все что после точки
-                    path = path[:path.rindex('.')]
-                path += '.zip'
+                    real_path = real_path[:real_path.rindex('.')]
+                real_path += '.zip'
 
                 if '.' not in filename:
                     filename += '.'+file.filename.split('.')[-1]
 
                 # Создаем архив
-                with ZipFile(path, "w", compression=ZIP_LZMA, compresslevel=9) as zipped:
+                with ZipFile(real_path, "w", compression=ZIP_LZMA, compresslevel=9) as zipped:
                     zipped.write(tmp_path, filename.split('/')[-1])
                 # Удаляем временный файл
                 os.remove(tmp_path)
 
                 # Удаляем из начала "{MAIN_DIR}/{type}/"
-                path = path.replace(f"{MAIN_DIR}/{type}/", "")
-                return path
+                real_path = real_path.replace(f"{MAIN_DIR}/{type}/", "")
+                return real_path
             # Если передан архив, то просто сохраняем
             else:
                 # Сохраняем архив
-                with open(path, "wb") as buffer:
+                with open(real_path, "wb") as buffer:
                     shutil.copyfileobj(file.file, buffer)
                 return filename
         case _:
             # Сохраняем файл
-            with open(path, "wb") as buffer:
+            with open(real_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             return filename
 
