@@ -111,8 +111,6 @@ async def upload(request: Request, token: str, file: UploadFile, type: str = For
         return PlainTextResponse(status_code=403, content="Access denied")
 
     real_path = f"{MAIN_DIR}/{type}/{path}"
-    # Удаляем из пути файл
-    path = path.split('/')[-1]
     # Проверяем существует ли директория, если нет, то создаем
     if not os.path.exists(os.path.dirname(real_path)):
         os.makedirs(os.path.dirname(real_path))
