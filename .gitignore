@@ -3,14 +3,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-mods/
-sql/
-.idea/
-steam_client/
-users_files_processing/
-steamapps/workshop/
-gunicorn_config.py
 ow_config.py
+mods/
+storage/
+.idea/
+.vscode/
 
 # C extensions
 *.so
