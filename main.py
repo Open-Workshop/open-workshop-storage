@@ -8,8 +8,8 @@ from fastapi import FastAPI, Request, UploadFile, Form
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 
-MAIN_DIR = 'storage'
-MANAGER_URL = 'http://127.0.0.1:8000'
+MAIN_DIR = config.MAIN_DIR
+MANAGER_URL = config.MANAGER_URL
 
 
 # Создание приложения
