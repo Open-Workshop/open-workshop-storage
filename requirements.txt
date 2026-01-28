@@ -1,0 +1,4 @@
+bcrypt
+fastapi[standard]
+aiohttp
+gunicorn[standard]
