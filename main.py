@@ -73,10 +73,9 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
                 id = int(path.split('/')[1])
                 user = request.cookies.get('userID', 0)
                 headers = {
-                    "Authorization": f"Bearer {config.check_access}",
-                    "X-User": user,
+                    "x-token": f"{config.check_access}",
                 }
-                async with session.get(f"{MANAGER_URL}/list/mods/access/[{id}]") as resp:
+                async with session.get(f"{MANAGER_URL}/list/mods/access/[{id}]?user={user}") as resp:
                     if resp.status == 200:
                         # Возвращает такой же список, проверяем, есть ли в нем интересующий нас ID
                         data = await resp.json()
@@ -105,7 +104,7 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
         },
     }
 )
-async def upload(request: Request, token: str, file: UploadFile, type: str = Form(), path: str = Form()):
+async def upload(request: Request, file: UploadFile, type: str = Form(), path: str = Form(), token: str = Form()):
     """
     Загружает файл в Storage (микросервис хранения, функция управляется другим микросервисов).
 
@@ -179,7 +178,7 @@ async def upload(request: Request, token: str, file: UploadFile, type: str = For
         }
     },
 )
-async def delete(request: Request, token: str, type: str = Form(), path: str = Form()):
+async def delete(request: Request, type: str = Form(), path: str = Form(), token: str = Form()):
     """
     Удаляет файл из Steam Workshop (микросервис хранения, функция управляется другим микросервисов).
 
