@@ -1,36 +1,15 @@
 import os
-import shutil
 from typing import Optional
 import anyio
 import aiohttp
 import tools
 import ow_config as config
-from zipfile import ZipFile, ZIP_LZMA
 from fastapi import FastAPI, Request, UploadFile, Form
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 
 
 MAIN_DIR = config.MAIN_DIR
 MANAGER_URL = config.MANAGER_URL
-
-
-# Защита от path traversal: возвращает абсолютный путь внутри base_dir
-def _safe_path(base_dir: str, path: str) -> str:
-    base_dir = os.path.abspath(base_dir)
-    target = os.path.abspath(os.path.join(base_dir, path))
-    if os.path.commonpath([target, base_dir]) != base_dir:
-        raise ValueError("Invalid path")
-    return target
-
-
-def _copy_fileobj_to_path(fileobj, dest_path: str) -> None:
-    with open(dest_path, "wb") as buffer:
-        shutil.copyfileobj(fileobj, buffer)
-
-
-def _zip_single_file(src_path: str, dest_zip_path: str, arcname: str) -> None:
-    with ZipFile(dest_zip_path, "w", compression=ZIP_LZMA, compresslevel=9) as zipped:
-        zipped.write(src_path, arcname)
 
 
 # Создание приложения
@@ -64,6 +43,10 @@ async def modify_header(request: Request, call_next):
             "description": "File send successfully",
             "content": {"application/octet-stream": {}},
         },
+        400: {
+            "description": "Invalid type",
+            "content": {"text/plain": {'example': 'Invalid type'}}
+        },
         403: {
             "description": "Access denied",
             "content": {"text/plain": {'example': 'Access denied'}}
@@ -82,9 +65,11 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
     """
     Возвращает запрашиваемый файл, если он существует.
     """
+    if not tools.is_allowed_type(type):
+        return PlainTextResponse(status_code=400, content="Invalid type")
     base_dir = os.path.join(MAIN_DIR, type)
     try:
-        real_path = _safe_path(base_dir, path)
+        real_path = tools.safe_path(base_dir, path)
     except ValueError:
         return PlainTextResponse(status_code=403, content="Access denied")
     
@@ -131,6 +116,11 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
             "content": {"text/plain": {'example': 'file/is/saved/as.tmp'}}, 
             "model": str
         },
+        400: {
+            "description": "Invalid type",
+            "content": {"text/plain": {'example': 'Invalid type'}},
+            "model": str
+        },
     }
 )
 async def upload(request: Request, file: UploadFile, type: str = Form(), path: str = Form(), token: str = Form()):
@@ -143,10 +133,12 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
     """
     if not tools.check_token('upload_file', token):
         return PlainTextResponse(status_code=403, content="Access denied")
+    if not tools.is_allowed_type(type):
+        return PlainTextResponse(status_code=400, content="Invalid type")
 
     base_dir = os.path.join(MAIN_DIR, type)
     try:
-        real_path = _safe_path(base_dir, path)
+        real_path = tools.safe_path(base_dir, path)
     except ValueError:
         return PlainTextResponse(status_code=403, content="Access denied")
     # Проверяем существует ли директория, если нет, то создаем
@@ -158,9 +150,9 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
             # Если передан просто файл, то конвертируем его в архив
             if not path.endswith(".zip"):
                 # Создаем временный файл для архива
-                tmp_path = _safe_path(base_dir, f"{path}.tmp")
+                tmp_path = tools.safe_path(base_dir, f"{path}.tmp")
                 # Сохраняем файл в временный файл
-                await anyio.to_thread.run_sync(_copy_fileobj_to_path, file.file, tmp_path)
+                await anyio.to_thread.run_sync(tools.copy_fileobj_to_path, file.file, tmp_path)
 
                 # Валидируем путь (расширение в конце заменяем)
                 real_root, _ = os.path.splitext(real_path)
@@ -171,7 +163,7 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
 
                 # Создаем архив
                 await anyio.to_thread.run_sync(
-                    _zip_single_file,
+                    tools.zip_single_file,
                     tmp_path,
                     real_path,
                     os.path.basename(path),
@@ -184,11 +176,11 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
             # Если передан архив, то просто сохраняем
             else:
                 # Сохраняем архив
-                await anyio.to_thread.run_sync(_copy_fileobj_to_path, file.file, real_path)
+                await anyio.to_thread.run_sync(tools.copy_fileobj_to_path, file.file, real_path)
                 return path
         case _:
             # Сохраняем файл
-            await anyio.to_thread.run_sync(_copy_fileobj_to_path, file.file, real_path)
+            await anyio.to_thread.run_sync(tools.copy_fileobj_to_path, file.file, real_path)
             return path
 
 @app.delete(
@@ -200,6 +192,11 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
         200: {
             "description": "File deleted successfully", 
             "content": {"text/plain": {'example': 'File deleted'}}, 
+            "model": str
+        },
+        400: {
+            "description": "Invalid type",
+            "content": {"text/plain": {'example': 'Invalid type'}},
             "model": str
         },
         404: {
@@ -219,11 +216,13 @@ async def delete(request: Request, type: str = Form(), path: str = Form(), token
     """
     if not tools.check_token('delete_file', token):
         return PlainTextResponse(status_code=403, content="Access denied")
+    if not tools.is_allowed_type(type):
+        return PlainTextResponse(status_code=400, content="Invalid type")
 
 
     base_dir = os.path.join(MAIN_DIR, type)
     try:
-        real_path = _safe_path(base_dir, path)
+        real_path = tools.safe_path(base_dir, path)
     except ValueError:
         return PlainTextResponse(status_code=403, content="Access denied")
 
@@ -237,11 +236,11 @@ async def delete(request: Request, type: str = Form(), path: str = Form(), token
             file_path (str): The path of the file to be deleted.
 
         Returns:
-            JSONResponse
+            PlainTextResponse
         """
         # Если файл не существует, то ничего не делаем
         if not os.path.isfile(file_path):
-            return JSONResponse(status_code=404, content="File not found")
+            return PlainTextResponse(status_code=404, content="File not found")
         # Удаляем файл
         os.remove(file_path)
         # Получаем путь к родительской папке файла
@@ -263,6 +262,6 @@ async def delete(request: Request, type: str = Form(), path: str = Form(), token
                 # то ничего не делаем
                 break
         
-        return JSONResponse(status_code=200, content="File deleted")
+        return PlainTextResponse(status_code=200, content="File deleted")
 
     return await anyio.to_thread.run_sync(delete_file_and_parent_folders, real_path, base_dir)

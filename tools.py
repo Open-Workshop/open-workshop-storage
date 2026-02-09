@@ -1,9 +1,34 @@
 import os
+import shutil
 from typing import Optional
+from zipfile import ZipFile, ZIP_LZMA
 import ow_config as config
 import bcrypt
 
 ALLOWED_FILENAME_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+ALLOWED_TYPES = {"archive", "img"}
+
+
+def safe_path(base_dir: str, path: str) -> str:
+    base_dir = os.path.abspath(base_dir)
+    target = os.path.abspath(os.path.join(base_dir, path))
+    if os.path.commonpath([target, base_dir]) != base_dir:
+        raise ValueError("Invalid path")
+    return target
+
+
+def copy_fileobj_to_path(fileobj, dest_path: str) -> None:
+    with open(dest_path, "wb") as buffer:
+        shutil.copyfileobj(fileobj, buffer)
+
+
+def zip_single_file(src_path: str, dest_zip_path: str, arcname: str) -> None:
+    with ZipFile(dest_zip_path, "w", compression=ZIP_LZMA, compresslevel=9) as zipped:
+        zipped.write(src_path, arcname)
+
+
+def is_allowed_type(type_name: str) -> bool:
+    return type_name in ALLOWED_TYPES
 
 
 def build_download_filename(requested_name: Optional[str], real_path: str) -> Optional[str]:
@@ -17,7 +42,7 @@ def build_download_filename(requested_name: Optional[str], real_path: str) -> Op
     return requested_name + ext
 
 
-async def check_token(token_name: str, token: str) -> bool:
+def check_token(token_name: str, token: str) -> bool:
     # Получаем значение хеша токена из config по имени token_name
     stored_token_hash = getattr(config, token_name, None)
     
