@@ -51,6 +51,10 @@ async def modify_header(request: Request, call_next):
             "description": "Access denied",
             "content": {"text/plain": {'example': 'Access denied'}}
         },
+        423: {
+            "description": "Access denied",
+            "content": {"text/plain": {'example': 'Access denied'}}
+        },
         404: {
             "description": "File not found on server",
             "content": {"text/plain": {'example': 'File not found'}}
@@ -71,7 +75,7 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
     try:
         real_path = tools.safe_path(base_dir, path)
     except ValueError:
-        return PlainTextResponse(status_code=403, content="Access denied")
+        return PlainTextResponse(status_code=423, content="Access denied")
     
     if os.path.isfile(real_path):
         download_name = tools.build_download_filename(filename, real_path)
