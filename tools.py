@@ -6,7 +6,7 @@ import ow_config as config
 import bcrypt
 
 ALLOWED_FILENAME_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
-ALLOWED_TYPES = {"archive", "img"}
+ALLOWED_TYPES = {"archive", "resource", "avatar"}
 
 
 def safe_path(base_dir: str, path: str) -> str:
