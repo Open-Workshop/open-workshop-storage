@@ -1,4 +1,5 @@
 import os
+import logging
 from typing import Optional
 import anyio
 import aiohttp
@@ -10,6 +11,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 
 MAIN_DIR = config.MAIN_DIR
 MANAGER_URL = config.MANAGER_URL
+logger = logging.getLogger("open_workshop.storage")
 
 
 # Создание приложения
@@ -69,12 +71,16 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
     """
     Возвращает запрашиваемый файл, если он существует.
     """
+    client = request.client.host if request.client else "unknown"
+    logger.info("download request type=%s path=%s client=%s", type, path, client)
     if not tools.is_allowed_type(type):
+        logger.warning("download invalid type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=400, content="Invalid type")
     base_dir = os.path.join(MAIN_DIR, type)
     try:
         real_path = tools.safe_path(base_dir, path)
     except ValueError:
+        logger.warning("download path traversal type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=423, content="Access denied")
     
     if os.path.isfile(real_path):
@@ -82,10 +88,12 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
         if type == 'archive' and path.startswith('mod/'):
             parts = path.split('/', 2)
             if len(parts) < 2:
+                logger.info("download not found (bad mod path) type=%s path=%s client=%s", type, path, client)
                 return PlainTextResponse(status_code=404, content="File not found")
             try:
                 mod_id = int(parts[1])
             except ValueError:
+                logger.info("download not found (bad mod id) type=%s path=%s client=%s", type, path, client)
                 return PlainTextResponse(status_code=404, content="File not found")
             # Асинхронно спрашиваем у Manager правомерность доступа к файлу
             async with aiohttp.ClientSession() as session:
@@ -98,15 +106,20 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
                         # Возвращает такой же список, проверяем, есть ли в нем интересующий нас ID
                         data = await resp.json()
                         if mod_id in data:
+                            logger.info("download allowed mod_id=%s type=%s path=%s client=%s", mod_id, type, path, client)
                             # Если есть, то возвращаем сам файл
                             return FileResponse(real_path, filename=download_name)
                         else:
+                            logger.warning("download denied mod_id=%s type=%s path=%s client=%s", mod_id, type, path, client)
                             return PlainTextResponse(status_code=403, content="Access denied")
                     else:
+                        logger.warning("manager unavailable status=%s mod_id=%s client=%s", resp.status, mod_id, client)
                         return PlainTextResponse(status_code=503, content="Manager unavailable")
         else:
+            logger.info("download ok type=%s path=%s client=%s", type, path, client)
             return FileResponse(real_path, filename=download_name)
     else:
+        logger.info("download not found type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=404, content="File not found")
 
 @app.post(
@@ -135,16 +148,21 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
 
     path: Путь и имя файла. В формате "директории/поддиректории/имя.файла". Если под папок нет существует, то они создаются.
     """
+    client = request.client.host if request.client else "unknown"
+    logger.info("upload request type=%s path=%s filename=%s client=%s", type, path, file.filename, client)
     if not await anyio.to_thread.run_sync(tools.check_token, 'upload_file', token):
+        logger.warning("upload denied (token) type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=403, content="Access denied")
     if not tools.is_allowed_type(type):
+        logger.warning("upload invalid type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=400, content="Invalid type")
 
     base_dir = os.path.join(MAIN_DIR, type)
     try:
         real_path = tools.safe_path(base_dir, path)
     except ValueError:
-        return PlainTextResponse(status_code=403, content="Access denied")
+        logger.warning("upload path traversal type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=423, content="Access denied")
     # Проверяем существует ли директория, если нет, то создаем
     if not os.path.exists(os.path.dirname(real_path)):
         os.makedirs(os.path.dirname(real_path))
@@ -176,15 +194,18 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
                 await anyio.to_thread.run_sync(os.remove, tmp_path)
 
                 # Удаляем из начала "{MAIN_DIR}/{type}/"
+                logger.info("upload archived type=%s path=%s client=%s", type, path, client)
                 return os.path.relpath(real_path, base_dir)
             # Если передан архив, то просто сохраняем
             else:
                 # Сохраняем архив
                 await anyio.to_thread.run_sync(tools.copy_fileobj_to_path, file.file, real_path)
+                logger.info("upload saved archive type=%s path=%s client=%s", type, path, client)
                 return path
         case _:
             # Сохраняем файл
             await anyio.to_thread.run_sync(tools.copy_fileobj_to_path, file.file, real_path)
+            logger.info("upload saved type=%s path=%s client=%s", type, path, client)
             return path
 
 @app.delete(
@@ -218,9 +239,13 @@ async def delete(request: Request, type: str = Form(), path: str = Form(), token
 
     Если после удаления файла, папка пуста, то она тоже удаляется (так же происходит со всеми родительскими папками)
     """
+    client = request.client.host if request.client else "unknown"
+    logger.info("delete request type=%s path=%s client=%s", type, path, client)
     if not await anyio.to_thread.run_sync(tools.check_token, 'delete_file', token):
+        logger.warning("delete denied (token) type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=403, content="Access denied")
     if not tools.is_allowed_type(type):
+        logger.warning("delete invalid type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=400, content="Invalid type")
 
 
@@ -228,6 +253,7 @@ async def delete(request: Request, type: str = Form(), path: str = Form(), token
     try:
         real_path = tools.safe_path(base_dir, path)
     except ValueError:
+        logger.warning("delete path traversal type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=403, content="Access denied")
 
 
@@ -244,6 +270,7 @@ async def delete(request: Request, type: str = Form(), path: str = Form(), token
         """
         # Если файл не существует, то ничего не делаем
         if not os.path.isfile(file_path):
+            logger.info("delete not found type=%s path=%s client=%s", type, path, client)
             return PlainTextResponse(status_code=404, content="File not found")
         # Удаляем файл
         os.remove(file_path)
@@ -266,6 +293,7 @@ async def delete(request: Request, type: str = Form(), path: str = Form(), token
                 # то ничего не делаем
                 break
         
+        logger.info("delete ok type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=200, content="File deleted")
 
     return await anyio.to_thread.run_sync(delete_file_and_parent_folders, real_path, base_dir)
