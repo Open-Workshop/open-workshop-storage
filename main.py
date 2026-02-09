@@ -1,6 +1,7 @@
 import os
 import shutil
 from typing import Optional
+import anyio
 import aiohttp
 import tools
 import ow_config as config
@@ -11,6 +12,25 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 MAIN_DIR = config.MAIN_DIR
 MANAGER_URL = config.MANAGER_URL
+
+
+# Защита от path traversal: возвращает абсолютный путь внутри base_dir
+def _safe_path(base_dir: str, path: str) -> str:
+    base_dir = os.path.abspath(base_dir)
+    target = os.path.abspath(os.path.join(base_dir, path))
+    if os.path.commonpath([target, base_dir]) != base_dir:
+        raise ValueError("Invalid path")
+    return target
+
+
+def _copy_fileobj_to_path(fileobj, dest_path: str) -> None:
+    with open(dest_path, "wb") as buffer:
+        shutil.copyfileobj(fileobj, buffer)
+
+
+def _zip_single_file(src_path: str, dest_zip_path: str, arcname: str) -> None:
+    with ZipFile(dest_zip_path, "w", compression=ZIP_LZMA, compresslevel=9) as zipped:
+        zipped.write(src_path, arcname)
 
 
 # Создание приложения
@@ -62,24 +82,33 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
     """
     Возвращает запрашиваемый файл, если он существует.
     """
-    path = path.replace('%2', '/')
-    real_path = f"{MAIN_DIR}/{type}/{path}"
+    base_dir = os.path.join(MAIN_DIR, type)
+    try:
+        real_path = _safe_path(base_dir, path)
+    except ValueError:
+        return PlainTextResponse(status_code=403, content="Access denied")
     
-    if os.path.exists(real_path):
+    if os.path.isfile(real_path):
         download_name = tools.build_download_filename(filename, real_path)
         if type == 'archive' and path.startswith('mod/'):
+            parts = path.split('/', 2)
+            if len(parts) < 2:
+                return PlainTextResponse(status_code=404, content="File not found")
+            try:
+                mod_id = int(parts[1])
+            except ValueError:
+                return PlainTextResponse(status_code=404, content="File not found")
             # Асинхронно спрашиваем у Manager правомерность доступа к файлу
             async with aiohttp.ClientSession() as session:
-                id = int(path.split('/')[1])
                 user = request.cookies.get('userID', 0)
                 headers = {
                     "x-token": f"{config.check_access}",
                 }
-                async with session.get(f"{MANAGER_URL}/list/mods/access/[{id}]?user={user}", headers=headers) as resp:
+                async with session.get(f"{MANAGER_URL}/list/mods/access/[{mod_id}]?user={user}", headers=headers) as resp:
                     if resp.status == 200:
                         # Возвращает такой же список, проверяем, есть ли в нем интересующий нас ID
                         data = await resp.json()
-                        if id in data:
+                        if mod_id in data:
                             # Если есть, то возвращаем сам файл
                             return FileResponse(real_path, filename=download_name)
                         else:
@@ -115,7 +144,11 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
     if not tools.check_token('upload_file', token):
         return PlainTextResponse(status_code=403, content="Access denied")
 
-    real_path = f"{MAIN_DIR}/{type}/{path}"
+    base_dir = os.path.join(MAIN_DIR, type)
+    try:
+        real_path = _safe_path(base_dir, path)
+    except ValueError:
+        return PlainTextResponse(status_code=403, content="Access denied")
     # Проверяем существует ли директория, если нет, то создаем
     if not os.path.exists(os.path.dirname(real_path)):
         os.makedirs(os.path.dirname(real_path))
@@ -125,39 +158,37 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
             # Если передан просто файл, то конвертируем его в архив
             if not path.endswith(".zip"):
                 # Создаем временный файл для архива
-                tmp_path = f"{MAIN_DIR}/{type}/{path}.tmp"
+                tmp_path = _safe_path(base_dir, f"{path}.tmp")
                 # Сохраняем файл в временный файл
-                with open(tmp_path, "wb") as buffer:
-                    shutil.copyfileobj(file.file, buffer)
+                await anyio.to_thread.run_sync(_copy_fileobj_to_path, file.file, tmp_path)
 
                 # Валидируем путь (расширение в конце заменяем)
-                if '.' in real_path:
-                    # Удалем все что после точки
-                    real_path = real_path[:real_path.rindex('.')]
-                real_path += '.zip'
+                real_root, _ = os.path.splitext(real_path)
+                real_path = real_root + '.zip'
 
-                if '.' not in path:
-                    path += '.'+file.filename.split('.')[-1]
+                if '.' not in path and file.filename and '.' in file.filename:
+                    path += '.' + file.filename.split('.')[-1]
 
                 # Создаем архив
-                with ZipFile(real_path, "w", compression=ZIP_LZMA, compresslevel=9) as zipped:
-                    zipped.write(tmp_path, path.split('/')[-1])
+                await anyio.to_thread.run_sync(
+                    _zip_single_file,
+                    tmp_path,
+                    real_path,
+                    os.path.basename(path),
+                )
                 # Удаляем временный файл
-                os.remove(tmp_path)
+                await anyio.to_thread.run_sync(os.remove, tmp_path)
 
                 # Удаляем из начала "{MAIN_DIR}/{type}/"
-                real_path = real_path.replace(f"{MAIN_DIR}/{type}/", "")
-                return real_path
+                return os.path.relpath(real_path, base_dir)
             # Если передан архив, то просто сохраняем
             else:
                 # Сохраняем архив
-                with open(real_path, "wb") as buffer:
-                    shutil.copyfileobj(file.file, buffer)
+                await anyio.to_thread.run_sync(_copy_fileobj_to_path, file.file, real_path)
                 return path
         case _:
             # Сохраняем файл
-            with open(real_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
+            await anyio.to_thread.run_sync(_copy_fileobj_to_path, file.file, real_path)
             return path
 
 @app.delete(
@@ -190,8 +221,15 @@ async def delete(request: Request, type: str = Form(), path: str = Form(), token
         return PlainTextResponse(status_code=403, content="Access denied")
 
 
+    base_dir = os.path.join(MAIN_DIR, type)
+    try:
+        real_path = _safe_path(base_dir, path)
+    except ValueError:
+        return PlainTextResponse(status_code=403, content="Access denied")
+
+
     # Функция которая удаляет файл и после этого рекурсивно удаляет все родительские папки, если они пусты
-    def delete_file_and_parent_folders(file_path: str):
+    def delete_file_and_parent_folders(file_path: str, root_dir: str):
         """
         Удаляет файл и после этого рекурсивно удаляет все родительские папки, если они пусты. Рекурсия прерывается при доходе до неприкосновенной части (no_delete).
 
@@ -208,8 +246,13 @@ async def delete(request: Request, type: str = Form(), path: str = Form(), token
         os.remove(file_path)
         # Получаем путь к родительской папке файла
         folder_path = os.path.dirname(file_path)
+        root_dir = os.path.abspath(root_dir)
         # Удаляем папку, если она пуста
-        while folder_path != "":
+        while (
+            folder_path
+            and os.path.commonpath([folder_path, root_dir]) == root_dir
+            and folder_path != root_dir
+        ):
             if not os.listdir(folder_path):
                 # удаляем ее
                 os.rmdir(folder_path)
@@ -222,4 +265,4 @@ async def delete(request: Request, type: str = Form(), path: str = Form(), token
         
         return JSONResponse(status_code=200, content="File deleted")
 
-    return delete_file_and_parent_folders(f"{MAIN_DIR}/{type}/{path}")
+    return await anyio.to_thread.run_sync(delete_file_and_parent_folders, real_path, base_dir)
