@@ -1,5 +1,6 @@
 import os
 import shutil
+from typing import Optional
 import aiohttp
 import tools
 import ow_config as config
@@ -57,7 +58,7 @@ async def modify_header(request: Request, call_next):
         }
     },
 )
-async def download(request: Request, type: str, path: str):
+async def download(request: Request, type: str, path: str, filename: Optional[str] = None):
     """
     Возвращает запрашиваемый файл, если он существует.
     """
@@ -65,24 +66,29 @@ async def download(request: Request, type: str, path: str):
     real_path = f"{MAIN_DIR}/{type}/{path}"
     
     if os.path.exists(real_path):
+        download_name = tools.build_download_filename(filename, real_path)
         if type == 'archive' and path.startswith('mod/'):
             # Асинхронно спрашиваем у Manager правомерность доступа к файлу
             async with aiohttp.ClientSession() as session:
                 id = int(path.split('/')[1])
                 user = request.cookies.get('userID', 0)
-                async with session.get(f"{MANAGER_URL}/list/mods/access/[{id}]?token={config.check_access}&user={user}") as resp:
+                headers = {
+                    "Authorization": f"Bearer {config.check_access}",
+                    "X-User": user,
+                }
+                async with session.get(f"{MANAGER_URL}/list/mods/access/[{id}]") as resp:
                     if resp.status == 200:
                         # Возвращает такой же список, проверяем, есть ли в нем интересующий нас ID
                         data = await resp.json()
                         if id in data:
                             # Если есть, то возвращаем сам файл
-                            return FileResponse(real_path)
+                            return FileResponse(real_path, filename=download_name)
                         else:
                             return PlainTextResponse(status_code=403, content="Access denied")
                     else:
                         return PlainTextResponse(status_code=503, content="Manager unavailable")
         else:
-            return FileResponse(real_path)
+            return FileResponse(real_path, filename=download_name)
     else:
         return PlainTextResponse(status_code=404, content="File not found")
 
