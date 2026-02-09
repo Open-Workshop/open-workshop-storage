@@ -131,7 +131,7 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
 
     path: Путь и имя файла. В формате "директории/поддиректории/имя.файла". Если под папок нет существует, то они создаются.
     """
-    if not tools.check_token('upload_file', token):
+    if not await anyio.to_thread.run_sync(tools.check_token, 'upload_file', token):
         return PlainTextResponse(status_code=403, content="Access denied")
     if not tools.is_allowed_type(type):
         return PlainTextResponse(status_code=400, content="Invalid type")
@@ -214,7 +214,7 @@ async def delete(request: Request, type: str = Form(), path: str = Form(), token
 
     Если после удаления файла, папка пуста, то она тоже удаляется (так же происходит со всеми родительскими папками)
     """
-    if not tools.check_token('delete_file', token):
+    if not await anyio.to_thread.run_sync(tools.check_token, 'delete_file', token):
         return PlainTextResponse(status_code=403, content="Access denied")
     if not tools.is_allowed_type(type):
         return PlainTextResponse(status_code=400, content="Invalid type")
