@@ -133,6 +133,11 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
             "content": {"text/plain": {'example': 'file/is/saved/as.tmp'}}, 
             "model": str
         },
+        401: {
+            "description": "Token not found",
+            "content": {"text/plain": {'example': 'Token not found'}},
+            "model": str
+        },
         400: {
             "description": "Invalid type",
             "content": {"text/plain": {'example': 'Invalid type'}},
@@ -150,6 +155,9 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
     """
     client = request.client.host if request.client else "unknown"
     logger.info("upload request type=%s path=%s filename=%s client=%s", type, path, file.filename, client)
+    if not token:
+        logger.warning("upload denied (token missing) type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=401, content="Token not found")
     if not await anyio.to_thread.run_sync(tools.check_token, 'upload_file', token):
         logger.warning("upload denied (token) type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=403, content="Access denied")
@@ -219,6 +227,11 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
             "content": {"text/plain": {'example': 'File deleted'}}, 
             "model": str
         },
+        401: {
+            "description": "Token not found",
+            "content": {"text/plain": {'example': 'Token not found'}},
+            "model": str
+        },
         400: {
             "description": "Invalid type",
             "content": {"text/plain": {'example': 'Invalid type'}},
@@ -241,6 +254,9 @@ async def delete(request: Request, type: str = Form(), path: str = Form(), token
     """
     client = request.client.host if request.client else "unknown"
     logger.info("delete request type=%s path=%s client=%s", type, path, client)
+    if not token:
+        logger.warning("delete denied (token missing) type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=401, content="Token not found")
     if not await anyio.to_thread.run_sync(tools.check_token, 'delete_file', token):
         logger.warning("delete denied (token) type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=403, content="Access denied")
