@@ -198,6 +198,14 @@ async def transfer_upload(
             total = int(content_len)
         except (TypeError, ValueError):
             total = None
+    logger.info(
+        "transfer upload start job_id=%s mod_id=%s filename=%s size_hint=%s client=%s",
+        job_id,
+        mod_id,
+        safe_name,
+        total,
+        client,
+    )
 
     async with JOB_LOCK:
         state = JOB_STATE.get(job_id)
@@ -228,6 +236,9 @@ async def transfer_upload(
 
     downloaded = 0
     last_push = 0.0
+    start_ts = time.monotonic()
+    last_log_bytes = 0
+    next_percent = 10
     callback_payload = {
         "mod_id": mod_id,
         "pack_format": pack_format,
@@ -273,6 +284,23 @@ async def transfer_upload(
                             "total": total,
                         },
                     )
+                if total:
+                    percent = int((downloaded / total) * 100)
+                    if percent >= next_percent:
+                        logger.info(
+                            "transfer upload progress job_id=%s percent=%s bytes=%s",
+                            job_id,
+                            percent,
+                            downloaded,
+                        )
+                        next_percent += 10
+                elif downloaded - last_log_bytes >= 50 * 1024 * 1024:
+                    last_log_bytes = downloaded
+                    logger.info(
+                        "transfer upload progress job_id=%s bytes=%s",
+                        job_id,
+                        downloaded,
+                    )
 
         await _set_state(job_id, status="done", bytes=downloaded, total=total)
         await _broadcast(
@@ -297,6 +325,13 @@ async def transfer_upload(
         except Exception:
             logger.warning("failed to update meta for job_id=%s", job_id)
 
+        duration = time.monotonic() - start_ts
+        logger.info(
+            "transfer upload done job_id=%s bytes=%s duration=%.2fs",
+            job_id,
+            downloaded,
+            duration,
+        )
         await _notify_manager(
             {
                 **callback_payload,
@@ -352,6 +387,7 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
         return
 
     await websocket.accept()
+    logger.info("transfer ws connect job_id=%s", job_id)
     async with JOB_LOCK:
         state = JOB_STATE.get(job_id)
         if not state:
@@ -382,6 +418,7 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
             state = JOB_STATE.get(job_id)
             if state and websocket in state.get("clients", set()):
                 state["clients"].remove(websocket)
+        logger.info("transfer ws disconnect job_id=%s", job_id)
 
 
 @app.post("/transfer/repack")
@@ -425,9 +462,41 @@ async def transfer_repack(
         compression_level = 9
     compression_level = max(0, min(compression_level, 9))
 
+    logger.info(
+        "transfer repack start job_id=%s format=%s level=%s client=%s",
+        job_id,
+        format,
+        compression_level,
+        client,
+    )
+    if os.path.exists(packed_abs):
+        packed_bytes = os.path.getsize(packed_abs)
+        meta.update(
+            {
+                "packed_path": packed_rel,
+                "packed_bytes": packed_bytes,
+                "pack_format": format,
+                "pack_level": compression_level,
+                "status": "packed",
+            }
+        )
+        await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+        logger.info(
+            "transfer repack reuse job_id=%s packed_bytes=%s",
+            job_id,
+            packed_bytes,
+        )
+        return {
+            "job_id": job_id,
+            "packed_bytes": packed_bytes,
+            "packed_path": packed_rel,
+        }
+
+    start_ts = time.monotonic()
     await anyio.to_thread.run_sync(
         tools.zip_single_file_with_level, download_abs, packed_abs, arcname, compression_level
     )
+    duration = time.monotonic() - start_ts
 
     packed_bytes = os.path.getsize(packed_abs)
     meta.update(
@@ -440,6 +509,12 @@ async def transfer_repack(
         }
     )
     await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+    logger.info(
+        "transfer repack done job_id=%s packed_bytes=%s duration=%.2fs",
+        job_id,
+        packed_bytes,
+        duration,
+    )
 
     return {
         "job_id": job_id,
@@ -484,11 +559,20 @@ async def transfer_move(
     except ValueError:
         return PlainTextResponse(status_code=423, content="Access denied")
 
+    logger.info(
+        "transfer move start job_id=%s type=%s path=%s client=%s",
+        job_id,
+        type,
+        path,
+        client,
+    )
+    start_ts = time.monotonic()
     os.makedirs(os.path.dirname(real_path), exist_ok=True)
     await anyio.to_thread.run_sync(shutil.move, packed_abs, real_path)
 
     final_rel = os.path.relpath(real_path, MAIN_DIR)
     final_bytes = os.path.getsize(real_path)
+    duration = time.monotonic() - start_ts
     meta.update(
         {
             "final_path": final_rel,
@@ -505,6 +589,12 @@ async def transfer_move(
     except Exception:
         logger.warning("failed to cleanup temp dir job_id=%s", job_id)
 
+    logger.info(
+        "transfer move done job_id=%s final_bytes=%s duration=%.2fs",
+        job_id,
+        final_bytes,
+        duration,
+    )
     return {
         "job_id": job_id,
         "final_path": final_rel,
@@ -584,11 +674,23 @@ async def _notify_manager(payload: dict[str, Any]) -> None:
     headers = {"Authorization": f"Bearer {token}"}
     async with aiohttp.ClientSession() as session:
         try:
+            logger.info(
+                "transfer callback send url=%s job_id=%s status=%s",
+                callback_url,
+                payload.get("job_id"),
+                payload.get("status"),
+            )
             async with session.post(callback_url, headers=headers) as resp:
                 if resp.status >= 400:
                     body = await resp.text()
                     logger.warning(
                         "transfer callback failed status=%s body=%s", resp.status, body
+                    )
+                else:
+                    logger.info(
+                        "transfer callback ok status=%s job_id=%s",
+                        resp.status,
+                        payload.get("job_id"),
                     )
         except Exception:
             logger.exception("transfer callback error")
