@@ -10,7 +10,7 @@ import anyio
 import aiohttp
 import tools
 import ow_config as config
-from fastapi import FastAPI, Request, UploadFile, Form, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, UploadFile, Form, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse
 
 
@@ -144,6 +144,200 @@ async def transfer_start(request: Request):
         "status": "started",
         "ws_url": f"/transfer/ws/{job_id}",
     }
+
+
+@app.post("/transfer/upload")
+async def transfer_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    token: Optional[str] = Form(None),
+):
+    client = request.client.host if request.client else "unknown"
+    token = token or request.query_params.get("token")
+    if not token:
+        logger.warning("transfer upload denied (token missing) client=%s", client)
+        return PlainTextResponse(status_code=401, content="Token not found")
+
+    payload = tools.decode_transfer_jwt(token, audience="storage")
+    if not payload:
+        logger.warning("transfer upload denied (token) client=%s", client)
+        return PlainTextResponse(status_code=403, content="Access denied")
+
+    job_id = str(payload.get("job_id", ""))
+    if not tools.is_safe_job_id(job_id):
+        return PlainTextResponse(status_code=400, content="Invalid job id")
+
+    pack_format = payload.get("pack_format", "zip")
+    if pack_format != "zip":
+        return PlainTextResponse(status_code=400, content="Unsupported format")
+
+    try:
+        pack_level = int(payload.get("pack_level", 9))
+    except (TypeError, ValueError):
+        pack_level = 9
+    pack_level = max(0, min(pack_level, 9))
+    mod_id = payload.get("mod_id")
+
+    max_bytes_raw = payload.get("max_bytes", None)
+    max_bytes = max_bytes_raw if max_bytes_raw is not None else getattr(config, "TRANSFER_MAX_BYTES", None)
+    try:
+        max_bytes = int(max_bytes) if max_bytes is not None else None
+    except (TypeError, ValueError):
+        max_bytes = None
+    if max_bytes is not None and max_bytes <= 0:
+        max_bytes = None
+
+    safe_name = tools.sanitize_filename(file.filename)
+    upload_rel = os.path.join("temp", job_id, safe_name)
+    upload_abs = tools.safe_path(MAIN_DIR, upload_rel)
+
+    total = None
+    content_len = request.headers.get("content-length")
+    if content_len:
+        try:
+            total = int(content_len)
+        except (TypeError, ValueError):
+            total = None
+
+    async with JOB_LOCK:
+        state = JOB_STATE.get(job_id)
+        if not state:
+            JOB_STATE[job_id] = {
+                "status": "uploading",
+                "bytes": 0,
+                "total": total,
+                "error": None,
+                "clients": set(),
+            }
+        else:
+            state.update({"status": "uploading", "bytes": 0, "total": total, "error": None})
+
+    meta = {
+        "job_id": job_id,
+        "mod_id": mod_id,
+        "filename": safe_name,
+        "download_path": upload_rel,
+        "pack_format": pack_format,
+        "pack_level": pack_level,
+        "status": "uploading",
+        "created_at": int(time.time()),
+    }
+    await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+
+    await _broadcast(job_id, {"event": "status", "status": "uploading"})
+
+    downloaded = 0
+    last_push = 0.0
+    callback_payload = {
+        "mod_id": mod_id,
+        "pack_format": pack_format,
+        "pack_level": pack_level,
+    }
+
+    try:
+        os.makedirs(os.path.dirname(upload_abs), exist_ok=True)
+        with open(upload_abs, "wb") as out_file:
+            while True:
+                chunk = await file.read(1024 * 256)
+                if not chunk:
+                    break
+                downloaded += len(chunk)
+                if max_bytes and downloaded > max_bytes:
+                    await _set_state(job_id, status="error", error="size_limit")
+                    await _broadcast(job_id, {"event": "error", "message": "file too large"})
+                    try:
+                        if os.path.exists(upload_abs):
+                            os.remove(upload_abs)
+                    except Exception:
+                        logger.warning("failed to cleanup partial file job_id=%s", job_id)
+                    await _notify_manager(
+                        {
+                            **callback_payload,
+                            "job_id": job_id,
+                            "status": "error",
+                            "reason": "size_limit",
+                        }
+                    )
+                    return PlainTextResponse(status_code=413, content="File too large")
+
+                await anyio.to_thread.run_sync(out_file.write, chunk)
+                now = time.monotonic()
+                if now - last_push >= PROGRESS_PUSH_INTERVAL:
+                    last_push = now
+                    await _set_state(job_id, bytes=downloaded)
+                    await _broadcast(
+                        job_id,
+                        {
+                            "event": "progress",
+                            "bytes": downloaded,
+                            "total": total,
+                        },
+                    )
+
+        await _set_state(job_id, status="done", bytes=downloaded, total=total)
+        await _broadcast(
+            job_id,
+            {
+                "event": "complete",
+                "bytes": downloaded,
+                "total": total,
+            },
+        )
+        try:
+            meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+            meta.update(
+                {
+                    "status": "uploaded",
+                    "downloaded_bytes": downloaded,
+                    "total_bytes": total,
+                    "upload_completed_at": int(time.time()),
+                }
+            )
+            await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+        except Exception:
+            logger.warning("failed to update meta for job_id=%s", job_id)
+
+        await _notify_manager(
+            {
+                **callback_payload,
+                "job_id": job_id,
+                "status": "success",
+                "bytes": downloaded,
+                "total": total,
+            }
+        )
+        return {
+            "job_id": job_id,
+            "bytes": downloaded,
+            "total": total,
+        }
+    except Exception as exc:
+        logger.exception("transfer upload failed job_id=%s", job_id)
+        try:
+            if os.path.exists(upload_abs):
+                os.remove(upload_abs)
+        except Exception:
+            logger.warning("failed to cleanup partial file job_id=%s", job_id)
+        try:
+            meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+            meta.update(
+                {
+                    "status": "error",
+                    "error": str(exc),
+                    "upload_completed_at": int(time.time()),
+                }
+            )
+            await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+        except Exception:
+            logger.warning("failed to update meta for job_id=%s", job_id)
+        await _set_state(job_id, status="error", error=str(exc))
+        await _broadcast(job_id, {"event": "error", "message": "upload failed"})
+        await _notify_manager(
+            {**callback_payload, "job_id": job_id, "status": "error", "reason": "exception"}
+        )
+        return PlainTextResponse(status_code=500, content="Upload failed")
+    finally:
+        await _close_clients(job_id)
 
 
 @app.websocket("/transfer/ws/{job_id}")
