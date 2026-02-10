@@ -232,7 +232,7 @@ async def transfer_upload(
     }
     await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
 
-    await _broadcast(job_id, {"event": "status", "status": "uploading"})
+    await _set_stage(job_id, "uploading")
 
     downloaded = 0
     last_push = 0.0
@@ -282,6 +282,7 @@ async def transfer_upload(
                             "event": "progress",
                             "bytes": downloaded,
                             "total": total,
+                            "stage": "uploading",
                         },
                     )
                 if total:
@@ -303,14 +304,6 @@ async def transfer_upload(
                     )
 
         await _set_state(job_id, status="done", bytes=downloaded, total=total)
-        await _broadcast(
-            job_id,
-            {
-                "event": "complete",
-                "bytes": downloaded,
-                "total": total,
-            },
-        )
         try:
             meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
             meta.update(
@@ -331,6 +324,34 @@ async def transfer_upload(
             job_id,
             downloaded,
             duration,
+        )
+        await _set_stage(job_id, "uploaded")
+
+        repack_ok, _, _ = await _run_repack_job(
+            job_id=job_id,
+            download_abs=upload_abs,
+            pack_format=pack_format,
+            pack_level=pack_level,
+        )
+        if not repack_ok:
+            await _notify_manager(
+                {
+                    **callback_payload,
+                    "job_id": job_id,
+                    "status": "error",
+                    "reason": "repack_failed",
+                }
+            )
+            return PlainTextResponse(status_code=500, content="Repack failed")
+
+        await _broadcast(
+            job_id,
+            {
+                "event": "complete",
+                "bytes": downloaded,
+                "total": total,
+                "stage": "packed",
+            },
         )
         await _notify_manager(
             {
@@ -393,6 +414,7 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
         if not state:
             state = {
                 "status": "pending",
+                "stage": "pending",
                 "bytes": 0,
                 "total": None,
                 "error": None,
@@ -406,6 +428,7 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
                 "bytes": state.get("bytes", 0),
                 "total": state.get("total"),
                 "status": state.get("status"),
+                "stage": state.get("stage"),
             }
         )
     try:
@@ -653,9 +676,95 @@ async def _set_state(job_id: str, **updates: Any) -> None:
     async with JOB_LOCK:
         state = JOB_STATE.setdefault(
             job_id,
-            {"status": "pending", "bytes": 0, "total": None, "error": None, "clients": set()},
+            {
+                "status": "pending",
+                "stage": "pending",
+                "bytes": 0,
+                "total": None,
+                "error": None,
+                "clients": set(),
+            },
         )
         state.update(updates)
+
+
+async def _set_stage(job_id: str, stage: str) -> None:
+    await _set_state(job_id, stage=stage)
+    await _broadcast(job_id, {"event": "stage", "stage": stage})
+
+
+async def _run_repack_job(
+    job_id: str,
+    download_abs: str,
+    pack_format: str,
+    pack_level: int,
+) -> tuple[bool, Optional[str], Optional[int]]:
+    if pack_format != "zip":
+        await _set_state(job_id, status="error", error="unsupported_format")
+        await _broadcast(job_id, {"event": "error", "message": "unsupported format"})
+        return False, None, None
+
+    packed_rel = os.path.join("temp", job_id, "packed.zip")
+    packed_abs = tools.safe_path(MAIN_DIR, packed_rel)
+
+    await _set_stage(job_id, "repacking")
+    if os.path.exists(packed_abs):
+        packed_bytes = os.path.getsize(packed_abs)
+        try:
+            meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+            meta.update(
+                {
+                    "packed_path": packed_rel,
+                    "packed_bytes": packed_bytes,
+                    "pack_format": pack_format,
+                    "pack_level": pack_level,
+                    "status": "packed",
+                }
+            )
+            await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+        except Exception:
+            logger.warning("failed to update meta for job_id=%s", job_id)
+        await _set_stage(job_id, "packed")
+        return True, packed_rel, packed_bytes
+
+    try:
+        start_ts = time.monotonic()
+        await anyio.to_thread.run_sync(
+            tools.zip_single_file_with_level,
+            download_abs,
+            packed_abs,
+            os.path.basename(download_abs),
+            pack_level,
+        )
+        duration = time.monotonic() - start_ts
+        packed_bytes = os.path.getsize(packed_abs)
+        try:
+            meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+            meta.update(
+                {
+                    "packed_path": packed_rel,
+                    "packed_bytes": packed_bytes,
+                    "pack_format": pack_format,
+                    "pack_level": pack_level,
+                    "status": "packed",
+                }
+            )
+            await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+        except Exception:
+            logger.warning("failed to update meta for job_id=%s", job_id)
+        await _set_stage(job_id, "packed")
+        logger.info(
+            "transfer repack done job_id=%s packed_bytes=%s duration=%.2fs",
+            job_id,
+            packed_bytes,
+            duration,
+        )
+        return True, packed_rel, packed_bytes
+    except Exception as exc:
+        logger.exception("transfer repack failed job_id=%s", job_id)
+        await _set_state(job_id, status="error", error=str(exc))
+        await _broadcast(job_id, {"event": "error", "message": "repack failed"})
+        return False, None, None
 
 
 async def _notify_manager(payload: dict[str, Any]) -> None:
@@ -704,7 +813,7 @@ async def _run_download_job(
     callback_payload: dict[str, Any],
 ) -> None:
     await _set_state(job_id, status="downloading", error=None)
-    await _broadcast(job_id, {"event": "status", "status": "downloading"})
+    await _set_stage(job_id, "downloading")
     downloaded = 0
     total = None
     last_push = 0.0
@@ -796,18 +905,11 @@ async def _run_download_job(
                                     "event": "progress",
                                     "bytes": downloaded,
                                     "total": total,
+                                    "stage": "downloading",
                                 },
                             )
 
         await _set_state(job_id, status="done", bytes=downloaded, total=total)
-        await _broadcast(
-            job_id,
-            {
-                "event": "complete",
-                "bytes": downloaded,
-                "total": total,
-            },
-        )
         try:
             meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
             meta.update(
@@ -821,6 +923,34 @@ async def _run_download_job(
             await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
         except Exception:
             logger.warning("failed to update meta for job_id=%s", job_id)
+        await _set_stage(job_id, "downloaded")
+
+        repack_ok, _, _ = await _run_repack_job(
+            job_id=job_id,
+            download_abs=download_abs,
+            pack_format=callback_payload.get("pack_format", "zip"),
+            pack_level=int(callback_payload.get("pack_level", 9)),
+        )
+        if not repack_ok:
+            await _notify_manager(
+                {
+                    **callback_payload,
+                    "job_id": job_id,
+                    "status": "error",
+                    "reason": "repack_failed",
+                }
+            )
+            return
+
+        await _broadcast(
+            job_id,
+            {
+                "event": "complete",
+                "bytes": downloaded,
+                "total": total,
+                "stage": "packed",
+            },
+        )
         await _notify_manager(
             {
                 **callback_payload,
