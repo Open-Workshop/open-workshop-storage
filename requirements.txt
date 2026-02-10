@@ -3,3 +3,4 @@ fastapi[standard]
 aiohttp
 gunicorn[standard]
 anyio
+PyJWT

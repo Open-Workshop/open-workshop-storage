@@ -1,17 +1,27 @@
 import os
 import logging
-from typing import Optional
+import asyncio
+import json
+import time
+import shutil
+from typing import Optional, Any
+from urllib.parse import urlparse
 import anyio
 import aiohttp
 import tools
 import ow_config as config
-from fastapi import FastAPI, Request, UploadFile, Form
+from fastapi import FastAPI, Request, UploadFile, Form, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse
 
 
 MAIN_DIR = config.MAIN_DIR
 MANAGER_URL = config.MANAGER_URL
 logger = logging.getLogger("open_workshop.storage")
+
+TEMP_DIR = os.path.join(MAIN_DIR, "temp")
+JOB_STATE: dict[str, dict[str, Any]] = {}
+JOB_LOCK = asyncio.Lock()
+PROGRESS_PUSH_INTERVAL = 0.25
 
 
 # Создание приложения
@@ -34,6 +44,522 @@ async def modify_header(request: Request, call_next):
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Expose-Headers"] = "Content-Type,Content-Disposition"
     return response
+
+
+async def _extract_token(request: Request) -> Optional[str]:
+    token = request.query_params.get("token")
+    if token:
+        return token
+    if request.method in ("POST", "PUT", "DELETE"):
+        form = await request.form()
+        return form.get("token")
+    return None
+
+
+@app.get("/transfer/start")
+@app.post("/transfer/start")
+async def transfer_start(request: Request):
+    token = await _extract_token(request)
+    if not token:
+        return PlainTextResponse(status_code=401, content="Token not found")
+
+    payload = tools.decode_transfer_jwt(token, audience="storage")
+    if not payload:
+        return PlainTextResponse(status_code=403, content="Access denied")
+
+    job_id = str(payload.get("job_id", ""))
+    if not tools.is_safe_job_id(job_id):
+        return PlainTextResponse(status_code=400, content="Invalid job id")
+
+    download_url = payload.get("download_url")
+    if not download_url:
+        return PlainTextResponse(status_code=400, content="Download URL missing")
+
+    parsed = urlparse(download_url)
+    if parsed.scheme not in {"http", "https"}:
+        return PlainTextResponse(status_code=400, content="Invalid download URL")
+
+    filename = payload.get("filename") or os.path.basename(parsed.path)
+    safe_name = tools.sanitize_filename(filename)
+
+    download_rel = os.path.join("temp", job_id, safe_name)
+    download_abs = tools.safe_path(MAIN_DIR, download_rel)
+
+    pack_format = payload.get("pack_format", "zip")
+    try:
+        pack_level = int(payload.get("pack_level", 9))
+    except (TypeError, ValueError):
+        pack_level = 9
+    mod_id = payload.get("mod_id")
+
+    max_bytes_raw = payload.get("max_bytes", None)
+    max_bytes = max_bytes_raw if max_bytes_raw is not None else getattr(config, "TRANSFER_MAX_BYTES", None)
+    try:
+        max_bytes = int(max_bytes) if max_bytes is not None else None
+    except (TypeError, ValueError):
+        max_bytes = None
+    if max_bytes is not None and max_bytes <= 0:
+        max_bytes = None
+
+    async with JOB_LOCK:
+        if job_id in JOB_STATE:
+            state = JOB_STATE[job_id]
+            return {
+                "job_id": job_id,
+                "status": state.get("status"),
+                "ws_url": f"/transfer/ws/{job_id}",
+            }
+        JOB_STATE[job_id] = {
+            "status": "pending",
+            "bytes": 0,
+            "total": None,
+            "error": None,
+            "clients": set(),
+        }
+
+    meta = {
+        "job_id": job_id,
+        "mod_id": mod_id,
+        "download_url": download_url,
+        "filename": safe_name,
+        "download_path": download_rel,
+        "pack_format": pack_format,
+        "pack_level": pack_level,
+        "status": "pending",
+        "created_at": int(time.time()),
+    }
+    await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+
+    callback_payload = {
+        "mod_id": mod_id,
+        "pack_format": pack_format,
+        "pack_level": pack_level,
+    }
+    asyncio.create_task(
+        _run_download_job(job_id, download_url, download_abs, max_bytes, callback_payload)
+    )
+
+    return {
+        "job_id": job_id,
+        "status": "started",
+        "ws_url": f"/transfer/ws/{job_id}",
+    }
+
+
+@app.websocket("/transfer/ws/{job_id}")
+async def transfer_ws(websocket: WebSocket, job_id: str):
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=1008)
+        return
+    payload = tools.decode_transfer_jwt(token, audience="storage")
+    if not payload or str(payload.get("job_id", "")) != job_id:
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
+    async with JOB_LOCK:
+        state = JOB_STATE.get(job_id)
+        if not state:
+            state = {
+                "status": "pending",
+                "bytes": 0,
+                "total": None,
+                "error": None,
+                "clients": set(),
+            }
+            JOB_STATE[job_id] = state
+        state.setdefault("clients", set()).add(websocket)
+        await websocket.send_json(
+            {
+                "event": "progress",
+                "bytes": state.get("bytes", 0),
+                "total": state.get("total"),
+                "status": state.get("status"),
+            }
+        )
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        async with JOB_LOCK:
+            state = JOB_STATE.get(job_id)
+            if state and websocket in state.get("clients", set()):
+                state["clients"].remove(websocket)
+
+
+@app.post("/transfer/repack")
+async def transfer_repack(
+    request: Request,
+    job_id: str = Form(),
+    format: str = Form("zip"),
+    compression_level: int = Form(9),
+    token: str = Form(),
+):
+    client = request.client.host if request.client else "unknown"
+    if not token:
+        logger.warning("transfer repack denied (token missing) job_id=%s client=%s", job_id, client)
+        return PlainTextResponse(status_code=401, content="Token not found")
+    if not await anyio.to_thread.run_sync(tools.check_token, "storage_manage_token", token):
+        logger.warning("transfer repack denied (token) job_id=%s client=%s", job_id, client)
+        return PlainTextResponse(status_code=403, content="Access denied")
+    if not tools.is_safe_job_id(job_id):
+        return PlainTextResponse(status_code=400, content="Invalid job id")
+
+    try:
+        meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+    except Exception:
+        return PlainTextResponse(status_code=404, content="Job not found")
+
+    if format != "zip":
+        return PlainTextResponse(status_code=400, content="Unsupported format")
+
+    download_rel = meta.get("download_path")
+    if not download_rel:
+        return PlainTextResponse(status_code=404, content="Source file not found")
+
+    download_abs = tools.safe_path(MAIN_DIR, download_rel)
+    packed_rel = os.path.join("temp", job_id, "packed.zip")
+    packed_abs = tools.safe_path(MAIN_DIR, packed_rel)
+
+    arcname = meta.get("filename") or os.path.basename(download_abs)
+    try:
+        compression_level = int(compression_level)
+    except (TypeError, ValueError):
+        compression_level = 9
+    compression_level = max(0, min(compression_level, 9))
+
+    await anyio.to_thread.run_sync(
+        tools.zip_single_file_with_level, download_abs, packed_abs, arcname, compression_level
+    )
+
+    packed_bytes = os.path.getsize(packed_abs)
+    meta.update(
+        {
+            "packed_path": packed_rel,
+            "packed_bytes": packed_bytes,
+            "pack_format": format,
+            "pack_level": compression_level,
+            "status": "packed",
+        }
+    )
+    await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+
+    return {
+        "job_id": job_id,
+        "packed_bytes": packed_bytes,
+        "packed_path": packed_rel,
+    }
+
+
+@app.post("/transfer/move")
+async def transfer_move(
+    request: Request,
+    job_id: str = Form(),
+    type: str = Form(),
+    path: str = Form(),
+    token: str = Form(),
+):
+    client = request.client.host if request.client else "unknown"
+    if not token:
+        logger.warning("transfer move denied (token missing) job_id=%s client=%s", job_id, client)
+        return PlainTextResponse(status_code=401, content="Token not found")
+    if not await anyio.to_thread.run_sync(tools.check_token, "storage_manage_token", token):
+        logger.warning("transfer move denied (token) job_id=%s client=%s", job_id, client)
+        return PlainTextResponse(status_code=403, content="Access denied")
+    if not tools.is_safe_job_id(job_id):
+        return PlainTextResponse(status_code=400, content="Invalid job id")
+    if not tools.is_allowed_type(type):
+        return PlainTextResponse(status_code=400, content="Invalid type")
+
+    try:
+        meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+    except Exception:
+        return PlainTextResponse(status_code=404, content="Job not found")
+
+    packed_rel = meta.get("packed_path")
+    if not packed_rel:
+        return PlainTextResponse(status_code=404, content="Packed file not found")
+
+    packed_abs = tools.safe_path(MAIN_DIR, packed_rel)
+    base_dir = os.path.join(MAIN_DIR, type)
+    try:
+        real_path = tools.safe_path(base_dir, path)
+    except ValueError:
+        return PlainTextResponse(status_code=423, content="Access denied")
+
+    os.makedirs(os.path.dirname(real_path), exist_ok=True)
+    await anyio.to_thread.run_sync(shutil.move, packed_abs, real_path)
+
+    final_rel = os.path.relpath(real_path, MAIN_DIR)
+    final_bytes = os.path.getsize(real_path)
+    meta.update(
+        {
+            "final_path": final_rel,
+            "final_bytes": final_bytes,
+            "status": "moved",
+            "moved_at": int(time.time()),
+        }
+    )
+    await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+
+    # Cleanup temp dir
+    try:
+        await anyio.to_thread.run_sync(shutil.rmtree, _job_dir(job_id))
+    except Exception:
+        logger.warning("failed to cleanup temp dir job_id=%s", job_id)
+
+    return {
+        "job_id": job_id,
+        "final_path": final_rel,
+        "final_bytes": final_bytes,
+    }
+
+
+def _job_dir(job_id: str) -> str:
+    return tools.safe_path(TEMP_DIR, job_id)
+
+
+def _job_meta_path(job_id: str) -> str:
+    return os.path.join(_job_dir(job_id), "meta.json")
+
+
+def _read_meta_sync(job_id: str) -> dict[str, Any]:
+    with open(_job_meta_path(job_id), "r", encoding="utf-8") as meta_file:
+        return json.load(meta_file)
+
+
+def _write_meta_sync(job_id: str, data: dict[str, Any]) -> None:
+    os.makedirs(_job_dir(job_id), exist_ok=True)
+    with open(_job_meta_path(job_id), "w", encoding="utf-8") as meta_file:
+        json.dump(data, meta_file, ensure_ascii=True)
+
+
+async def _broadcast(job_id: str, message: dict[str, Any]) -> None:
+    async with JOB_LOCK:
+        state = JOB_STATE.get(job_id)
+        if not state:
+            return
+        clients = list(state.get("clients", []))
+    for ws in clients:
+        try:
+            await ws.send_json(message)
+        except Exception:
+            # Client will be cleaned up on disconnect
+            pass
+
+
+async def _close_clients(job_id: str) -> None:
+    async with JOB_LOCK:
+        state = JOB_STATE.get(job_id)
+        if not state:
+            return
+        clients = list(state.get("clients", []))
+        state["clients"] = set()
+    for ws in clients:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
+async def _set_state(job_id: str, **updates: Any) -> None:
+    async with JOB_LOCK:
+        state = JOB_STATE.setdefault(
+            job_id,
+            {"status": "pending", "bytes": 0, "total": None, "error": None, "clients": set()},
+        )
+        state.update(updates)
+
+
+async def _notify_manager(payload: dict[str, Any]) -> None:
+    callback_url = getattr(config, "MANAGER_TRANSFER_CALLBACK_URL", None) or (
+        f"{MANAGER_URL}/storage/transfer/complete"
+    )
+    ttl_raw = getattr(config, "TRANSFER_CALLBACK_TTL_SECONDS", 600)
+    try:
+        ttl_seconds = int(ttl_raw)
+    except (TypeError, ValueError):
+        ttl_seconds = 600
+    token = tools.encode_transfer_jwt(payload, audience="manager", ttl_seconds=ttl_seconds)
+    if not token:
+        logger.warning("transfer callback skipped (missing JWT secret)")
+        return
+    headers = {"Authorization": f"Bearer {token}"}
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(callback_url, headers=headers) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    logger.warning(
+                        "transfer callback failed status=%s body=%s", resp.status, body
+                    )
+        except Exception:
+            logger.exception("transfer callback error")
+
+
+async def _run_download_job(
+    job_id: str,
+    download_url: str,
+    download_abs: str,
+    max_bytes: Optional[int],
+    callback_payload: dict[str, Any],
+) -> None:
+    await _set_state(job_id, status="downloading", error=None)
+    await _broadcast(job_id, {"event": "status", "status": "downloading"})
+    downloaded = 0
+    total = None
+    last_push = 0.0
+    try:
+        meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+        meta.update({"status": "downloading", "download_started_at": int(time.time())})
+        await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+    except Exception:
+        logger.warning("failed to update meta (start) for job_id=%s", job_id)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(download_url) as resp:
+                if resp.status != 200:
+                    await _set_state(job_id, status="error", error=f"status:{resp.status}")
+                    await _broadcast(
+                        job_id,
+                        {
+                            "event": "error",
+                            "message": f"download failed with status {resp.status}",
+                        },
+                    )
+                    await _notify_manager(
+                        {
+                            **callback_payload,
+                            "job_id": job_id,
+                            "status": "error",
+                            "reason": f"status:{resp.status}",
+                        }
+                    )
+                    return
+
+                total = resp.content_length
+                await _set_state(job_id, total=total)
+                if max_bytes and total and total > max_bytes:
+                    await _set_state(job_id, status="error", error="size_limit")
+                    await _broadcast(
+                        job_id,
+                        {"event": "error", "message": "file too large"},
+                    )
+                    try:
+                        if os.path.exists(download_abs):
+                            os.remove(download_abs)
+                    except Exception:
+                        logger.warning("failed to cleanup partial file job_id=%s", job_id)
+                    await _notify_manager(
+                        {
+                            **callback_payload,
+                            "job_id": job_id,
+                            "status": "error",
+                            "reason": "size_limit",
+                        }
+                    )
+                    return
+
+                os.makedirs(os.path.dirname(download_abs), exist_ok=True)
+                with open(download_abs, "wb") as out_file:
+                    async for chunk in resp.content.iter_chunked(1024 * 256):
+                        if not chunk:
+                            continue
+                        downloaded += len(chunk)
+                        if max_bytes and downloaded > max_bytes:
+                            await _set_state(job_id, status="error", error="size_limit")
+                            await _broadcast(
+                                job_id,
+                                {"event": "error", "message": "file too large"},
+                            )
+                            try:
+                                if os.path.exists(download_abs):
+                                    os.remove(download_abs)
+                            except Exception:
+                                logger.warning("failed to cleanup partial file job_id=%s", job_id)
+                            await _notify_manager(
+                                {
+                                    **callback_payload,
+                                    "job_id": job_id,
+                                    "status": "error",
+                                    "reason": "size_limit",
+                                }
+                            )
+                            return
+                        await anyio.to_thread.run_sync(out_file.write, chunk)
+                        now = time.monotonic()
+                        if now - last_push >= PROGRESS_PUSH_INTERVAL:
+                            last_push = now
+                            await _set_state(job_id, bytes=downloaded)
+                            await _broadcast(
+                                job_id,
+                                {
+                                    "event": "progress",
+                                    "bytes": downloaded,
+                                    "total": total,
+                                },
+                            )
+
+        await _set_state(job_id, status="done", bytes=downloaded, total=total)
+        await _broadcast(
+            job_id,
+            {
+                "event": "complete",
+                "bytes": downloaded,
+                "total": total,
+            },
+        )
+        try:
+            meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+            meta.update(
+                {
+                    "status": "downloaded",
+                    "downloaded_bytes": downloaded,
+                    "total_bytes": total,
+                    "download_completed_at": int(time.time()),
+                }
+            )
+            await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+        except Exception:
+            logger.warning("failed to update meta for job_id=%s", job_id)
+        await _notify_manager(
+            {
+                **callback_payload,
+                "job_id": job_id,
+                "status": "success",
+                "bytes": downloaded,
+                "total": total,
+            }
+        )
+    except Exception as exc:
+        logger.exception("transfer download failed job_id=%s", job_id)
+        try:
+            if os.path.exists(download_abs):
+                os.remove(download_abs)
+        except Exception:
+            logger.warning("failed to cleanup partial file job_id=%s", job_id)
+        try:
+            meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+            meta.update(
+                {
+                    "status": "error",
+                    "error": str(exc),
+                    "download_completed_at": int(time.time()),
+                }
+            )
+            await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+        except Exception:
+            logger.warning("failed to update meta for job_id=%s", job_id)
+        await _set_state(job_id, status="error", error=str(exc))
+        await _broadcast(job_id, {"event": "error", "message": "download failed"})
+        await _notify_manager(
+            {**callback_payload, "job_id": job_id, "status": "error", "reason": "exception"}
+        )
+    finally:
+        await _close_clients(job_id)
 
 
 @app.get(
@@ -149,7 +675,7 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
     """
     Загружает файл в Storage (микросервис хранения, функция управляется другим микросервисов).
 
-    type: Тип файла. Поддерживает следующие значения: img, archive. От этого зависит ключевая директория и доп. действия предпринимаемые сервером.
+    type: Тип файла. Поддерживает следующие значения: resource, avatar.
 
     path: Путь и имя файла. В формате "директории/поддиректории/имя.файла". Если под папок нет существует, то они создаются.
     """
@@ -161,7 +687,7 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
     if not await anyio.to_thread.run_sync(tools.check_token, 'upload_file', token):
         logger.warning("upload denied (token) type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=403, content="Access denied")
-    if not tools.is_allowed_type(type):
+    if not tools.is_allowed_upload_type(type):
         logger.warning("upload invalid type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=400, content="Invalid type")
 
@@ -175,46 +701,10 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
     if not os.path.exists(os.path.dirname(real_path)):
         os.makedirs(os.path.dirname(real_path))
 
-    match type:
-        case "archive":
-            # Если передан просто файл, то конвертируем его в архив
-            if not path.endswith(".zip"):
-                # Создаем временный файл для архива
-                tmp_path = tools.safe_path(base_dir, f"{path}.tmp")
-                # Сохраняем файл в временный файл
-                await anyio.to_thread.run_sync(tools.copy_fileobj_to_path, file.file, tmp_path)
-
-                # Валидируем путь (расширение в конце заменяем)
-                real_root, _ = os.path.splitext(real_path)
-                real_path = real_root + '.zip'
-
-                if '.' not in path and file.filename and '.' in file.filename:
-                    path += '.' + file.filename.split('.')[-1]
-
-                # Создаем архив
-                await anyio.to_thread.run_sync(
-                    tools.zip_single_file,
-                    tmp_path,
-                    real_path,
-                    os.path.basename(path),
-                )
-                # Удаляем временный файл
-                await anyio.to_thread.run_sync(os.remove, tmp_path)
-
-                # Удаляем из начала "{MAIN_DIR}/{type}/"
-                logger.info("upload archived type=%s path=%s client=%s", type, path, client)
-                return os.path.relpath(real_path, base_dir)
-            # Если передан архив, то просто сохраняем
-            else:
-                # Сохраняем архив
-                await anyio.to_thread.run_sync(tools.copy_fileobj_to_path, file.file, real_path)
-                logger.info("upload saved archive type=%s path=%s client=%s", type, path, client)
-                return path
-        case _:
-            # Сохраняем файл
-            await anyio.to_thread.run_sync(tools.copy_fileobj_to_path, file.file, real_path)
-            logger.info("upload saved type=%s path=%s client=%s", type, path, client)
-            return path
+    # Сохраняем файл
+    await anyio.to_thread.run_sync(tools.copy_fileobj_to_path, file.file, real_path)
+    logger.info("upload saved type=%s path=%s client=%s", type, path, client)
+    return path
 
 @app.delete(
     "/delete",
