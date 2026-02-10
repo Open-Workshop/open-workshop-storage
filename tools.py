@@ -3,7 +3,7 @@ import re
 import shutil
 from typing import Optional, Any
 from datetime import datetime, timedelta, timezone
-from zipfile import ZipFile, ZIP_LZMA
+from zipfile import ZipFile, ZIP_DEFLATED
 import ow_config as config
 import bcrypt
 import jwt
@@ -32,9 +32,9 @@ def zip_single_file_with_level(
     src_path: str,
     dest_zip_path: str,
     arcname: str,
-    compresslevel: int = 9,
+    compresslevel: int = 3,
 ) -> None:
-    with ZipFile(dest_zip_path, "w", compression=ZIP_LZMA, compresslevel=compresslevel) as zipped:
+    with ZipFile(dest_zip_path, "w", compression=ZIP_DEFLATED, compresslevel=compresslevel) as zipped:
         zipped.write(src_path, arcname)
 
 

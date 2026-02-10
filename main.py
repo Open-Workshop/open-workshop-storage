@@ -87,9 +87,9 @@ async def transfer_start(request: Request):
 
     pack_format = payload.get("pack_format", "zip")
     try:
-        pack_level = int(payload.get("pack_level", 9))
+        pack_level = int(payload.get("pack_level", 3))
     except (TypeError, ValueError):
-        pack_level = 9
+        pack_level = 3
     mod_id = payload.get("mod_id")
 
     max_bytes_raw = payload.get("max_bytes", None)
@@ -130,10 +130,12 @@ async def transfer_start(request: Request):
     }
     await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
 
+    update_only = bool(payload.get("update_only") or payload.get("keep_condition"))
     callback_payload = {
         "mod_id": mod_id,
         "pack_format": pack_format,
         "pack_level": pack_level,
+        "update_only": update_only,
     }
     asyncio.create_task(
         _run_download_job(job_id, download_url, download_abs, max_bytes, callback_payload)
@@ -172,9 +174,9 @@ async def transfer_upload(
         return PlainTextResponse(status_code=400, content="Unsupported format")
 
     try:
-        pack_level = int(payload.get("pack_level", 9))
+        pack_level = int(payload.get("pack_level", 3))
     except (TypeError, ValueError):
-        pack_level = 9
+        pack_level = 3
     pack_level = max(0, min(pack_level, 9))
     mod_id = payload.get("mod_id")
 
@@ -239,10 +241,12 @@ async def transfer_upload(
     start_ts = time.monotonic()
     last_log_bytes = 0
     next_percent = 10
+    update_only = bool(payload.get("update_only") or payload.get("keep_condition"))
     callback_payload = {
         "mod_id": mod_id,
         "pack_format": pack_format,
         "pack_level": pack_level,
+        "update_only": update_only,
     }
 
     try:
@@ -449,7 +453,7 @@ async def transfer_repack(
     request: Request,
     job_id: str = Form(),
     format: str = Form("zip"),
-    compression_level: int = Form(9),
+    compression_level: int = Form(3),
     token: str = Form(),
 ):
     client = request.client.host if request.client else "unknown"
@@ -482,7 +486,7 @@ async def transfer_repack(
     try:
         compression_level = int(compression_level)
     except (TypeError, ValueError):
-        compression_level = 9
+        compression_level = 3
     compression_level = max(0, min(compression_level, 9))
 
     logger.info(
@@ -929,7 +933,7 @@ async def _run_download_job(
             job_id=job_id,
             download_abs=download_abs,
             pack_format=callback_payload.get("pack_format", "zip"),
-            pack_level=int(callback_payload.get("pack_level", 9)),
+            pack_level=int(callback_payload.get("pack_level", 3)),
         )
         if not repack_ok:
             await _notify_manager(
