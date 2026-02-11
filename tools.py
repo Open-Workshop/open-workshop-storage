@@ -45,10 +45,17 @@ def _run_7z(args: list[str], cwd: Optional[str] = None) -> subprocess.CompletedP
     )
 
 
-def _list_7z_entries(zip_path: str) -> Optional[list[dict[str, str]]]:
-    result = _run_7z(["l", "-slt", "-tzip", zip_path])
+def _run_7z_list(
+    path: str, archive_type: Optional[str] = None
+) -> tuple[Optional[list[dict[str, str]]], str, int]:
+    args = ["l", "-slt"]
+    if archive_type:
+        args.append(f"-t{archive_type}")
+    args.append(path)
+    result = _run_7z(args)
     if result.returncode != 0:
-        return None
+        output = (result.stderr or "") + "\n" + (result.stdout or "")
+        return None, output.strip(), result.returncode
     entries: list[dict[str, str]] = []
     current: dict[str, str] = {}
     for line in result.stdout.splitlines():
@@ -63,9 +70,36 @@ def _list_7z_entries(zip_path: str) -> Optional[list[dict[str, str]]]:
             current[key] = value
     if current:
         entries.append(current)
-    if entries and entries[0].get("Type") == "zip":
-        entries = entries[1:]
+    return entries, "", 0
+
+
+def _list_7z_entries(path: str, archive_type: Optional[str] = None) -> Optional[list[dict[str, str]]]:
+    entries, _, code = _run_7z_list(path, archive_type=archive_type)
+    if code != 0:
+        return None
     return entries
+
+
+def probe_archive(path: str) -> tuple[Optional[str], bool]:
+    entries, error, code = _run_7z_list(path)
+    if code != 0 or not entries:
+        lowered = error.lower()
+        if "password" in lowered or "encrypted" in lowered:
+            return None, True
+        return None, False
+    archive_type = entries[0].get("Type")
+    archive_type = archive_type.lower() if archive_type else None
+    encrypted = False
+    for entry in entries:
+        if entry.get("Encrypted") == "+":
+            encrypted = True
+            break
+    return archive_type, encrypted
+
+
+def detect_archive_type(path: str) -> Optional[str]:
+    archive_type, _ = probe_archive(path)
+    return archive_type
 
 
 def zip_single_file_with_level(
@@ -124,22 +158,23 @@ def zip_dir_with_level(src_dir: str, dest_zip_path: str, compresslevel: int = 3)
 
 
 def is_zip_file(path: str) -> bool:
-    if not os.path.isfile(path):
-        return False
-    try:
-        with open(path, "rb") as handle:
-            signature = handle.read(4)
-        return signature in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
-    except OSError:
-        return False
+    return detect_archive_type(path) == "zip"
+
+
+def is_archive_file(path: str) -> bool:
+    return detect_archive_type(path) is not None
 
 
 def zip_uses_deflated_or_better(path: str) -> bool:
-    entries = _list_7z_entries(path)
+    entries = _list_7z_entries(path, archive_type="zip")
     if not entries:
         return False
 
     for entry in entries:
+        if entry.get("Type"):
+            continue
+        if not entry.get("Path"):
+            continue
         if entry.get("Folder") == "+":
             continue
         if entry.get("Encrypted") == "+":
@@ -162,34 +197,56 @@ def zip_uses_deflated_or_better(path: str) -> bool:
     return True
 
 
+def archive_has_encrypted(path: str) -> bool:
+    _, encrypted = probe_archive(path)
+    return encrypted
+
+
 def zip_has_encrypted(path: str) -> bool:
-    entries = _list_7z_entries(path)
-    if entries is None:
-        return True
-    for entry in entries:
-        if entry.get("Encrypted") == "+":
-            return True
-    return False
+    return archive_has_encrypted(path)
 
 
-def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
+def _find_single_tar(dest_dir: str) -> Optional[str]:
+    entries = os.listdir(dest_dir)
+    if len(entries) != 1:
+        return None
+    path = os.path.join(dest_dir, entries[0])
+    if os.path.isfile(path) and entries[0].lower().endswith(".tar"):
+        return path
+    return None
+
+
+def safe_extract_archive(archive_path: str, dest_dir: str) -> None:
     dest_dir = os.path.abspath(dest_dir)
-    entries = _list_7z_entries(zip_path)
+    entries = _list_7z_entries(archive_path)
     if entries is None:
-        raise ValueError("Invalid zip archive")
+        raise ValueError("Invalid archive")
     for entry in entries:
         if entry.get("Encrypted") == "+":
-            raise ValueError("Encrypted zip entries are not supported")
+            raise ValueError("Encrypted archive entries are not supported")
+        if entry.get("Type"):
+            continue
         name = (entry.get("Path") or "").replace("\\", "/")
         if not name:
             continue
         target_path = os.path.abspath(os.path.join(dest_dir, name))
         if os.path.commonpath([target_path, dest_dir]) != dest_dir:
-            raise ValueError("Unsafe path in zip")
+            raise ValueError("Unsafe path in archive")
     os.makedirs(dest_dir, exist_ok=True)
-    result = _run_7z(["x", "-tzip", f"-o{dest_dir}", "-y", zip_path])
+    result = _run_7z(["x", f"-o{dest_dir}", "-y", archive_path])
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "7z failed to extract zip")
+        raise RuntimeError(result.stderr.strip() or "7z failed to extract archive")
+
+    archive_type = (entries[0].get("Type") or "").lower()
+    if archive_type in {"gzip", "bzip2", "xz"}:
+        tar_path = _find_single_tar(dest_dir)
+        if tar_path:
+            safe_extract_archive(tar_path, dest_dir)
+            os.remove(tar_path)
+
+
+def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
+    safe_extract_archive(zip_path, dest_dir)
 
 
 def is_allowed_type(type_name: str) -> bool:

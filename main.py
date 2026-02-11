@@ -339,32 +339,32 @@ async def transfer_upload(
             duration,
         )
 
-        is_zip = await anyio.to_thread.run_sync(tools.is_zip_file, upload_abs)
-        if is_zip:
-            has_encrypted = await anyio.to_thread.run_sync(tools.zip_has_encrypted, upload_abs)
-            if has_encrypted:
-                await _set_state(job_id, status="error", error="encrypted_zip")
-                await _broadcast(job_id, {"event": "error", "message": "zip encrypted"})
-                try:
-                    meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
-                    meta.update({"status": "error", "error_reason": "encrypted_zip"})
-                    await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
-                except Exception:
-                    logger.warning("failed to update meta for job_id=%s", job_id)
-                try:
-                    if os.path.exists(upload_abs):
-                        os.remove(upload_abs)
-                except Exception:
-                    logger.warning("failed to cleanup encrypted zip job_id=%s", job_id)
-                await _notify_manager(
-                    {
-                        **callback_payload,
-                        "job_id": job_id,
-                        "status": "error",
-                        "reason": "encrypted_zip",
-                    }
-                )
-                return PlainTextResponse(status_code=400, content="Encrypted zip not allowed")
+        archive_type, is_encrypted = await anyio.to_thread.run_sync(
+            tools.probe_archive, upload_abs
+        )
+        if is_encrypted:
+            await _set_state(job_id, status="error", error="encrypted_zip")
+            await _broadcast(job_id, {"event": "error", "message": "zip encrypted"})
+            try:
+                meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+                meta.update({"status": "error", "error_reason": "encrypted_zip"})
+                await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+            except Exception:
+                logger.warning("failed to update meta for job_id=%s", job_id)
+            try:
+                if os.path.exists(upload_abs):
+                    os.remove(upload_abs)
+            except Exception:
+                logger.warning("failed to cleanup encrypted zip job_id=%s", job_id)
+            await _notify_manager(
+                {
+                    **callback_payload,
+                    "job_id": job_id,
+                    "status": "error",
+                    "reason": "encrypted_zip",
+                }
+            )
+            return PlainTextResponse(status_code=400, content="Encrypted zip not allowed")
 
         await _set_stage(job_id, "uploaded")
 
@@ -711,20 +711,21 @@ async def _run_repack_job(
     packed_abs = tools.safe_path(MAIN_DIR, packed_rel)
 
     await _set_stage(job_id, "repacking")
-    is_zip = await anyio.to_thread.run_sync(tools.is_zip_file, download_abs)
-    if is_zip:
-        has_encrypted = await anyio.to_thread.run_sync(tools.zip_has_encrypted, download_abs)
-        if has_encrypted:
-            await _set_state(job_id, status="error", error="encrypted_zip")
-            await _broadcast(job_id, {"event": "error", "message": "zip encrypted"})
-            try:
-                meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
-                meta.update({"status": "error", "error_reason": "encrypted_zip"})
-                await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
-            except Exception:
-                logger.warning("failed to update meta for job_id=%s", job_id)
-            logger.warning("transfer repack denied (encrypted zip) job_id=%s", job_id)
-            return False, None, None, "encrypted_zip"
+    archive_type, is_encrypted = await anyio.to_thread.run_sync(
+        tools.probe_archive, download_abs
+    )
+    if is_encrypted:
+        await _set_state(job_id, status="error", error="encrypted_zip")
+        await _broadcast(job_id, {"event": "error", "message": "zip encrypted"})
+        try:
+            meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+            meta.update({"status": "error", "error_reason": "encrypted_zip"})
+            await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+        except Exception:
+            logger.warning("failed to update meta for job_id=%s", job_id)
+        logger.warning("transfer repack denied (encrypted zip) job_id=%s", job_id)
+        return False, None, None, "encrypted_zip"
+    if archive_type == "zip":
         zip_ok = await anyio.to_thread.run_sync(tools.zip_uses_deflated_or_better, download_abs)
         if zip_ok:
             try:
@@ -778,8 +779,8 @@ async def _run_repack_job(
             await anyio.to_thread.run_sync(shutil.rmtree, repack_abs)
         os.makedirs(repack_abs, exist_ok=True)
 
-        if is_zip:
-            await anyio.to_thread.run_sync(tools.safe_extract_zip, download_abs, repack_abs)
+        if archive_type:
+            await anyio.to_thread.run_sync(tools.safe_extract_archive, download_abs, repack_abs)
         else:
             dest_name = os.path.basename(download_abs)
             dest_path = os.path.join(repack_abs, dest_name)
