@@ -479,10 +479,6 @@ async def transfer_repack(
         return PlainTextResponse(status_code=404, content="Source file not found")
 
     download_abs = tools.safe_path(MAIN_DIR, download_rel)
-    packed_rel = os.path.join("temp", job_id, "packed.zip")
-    packed_abs = tools.safe_path(MAIN_DIR, packed_rel)
-
-    arcname = meta.get("filename") or os.path.basename(download_abs)
     try:
         compression_level = int(compression_level)
     except (TypeError, ValueError):
@@ -496,52 +492,14 @@ async def transfer_repack(
         compression_level,
         client,
     )
-    if os.path.exists(packed_abs):
-        packed_bytes = os.path.getsize(packed_abs)
-        meta.update(
-            {
-                "packed_path": packed_rel,
-                "packed_bytes": packed_bytes,
-                "pack_format": format,
-                "pack_level": compression_level,
-                "status": "packed",
-            }
-        )
-        await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
-        logger.info(
-            "transfer repack reuse job_id=%s packed_bytes=%s",
-            job_id,
-            packed_bytes,
-        )
-        return {
-            "job_id": job_id,
-            "packed_bytes": packed_bytes,
-            "packed_path": packed_rel,
-        }
-
-    start_ts = time.monotonic()
-    await anyio.to_thread.run_sync(
-        tools.zip_single_file_with_level, download_abs, packed_abs, arcname, compression_level
+    repack_ok, packed_rel, packed_bytes = await _run_repack_job(
+        job_id=job_id,
+        download_abs=download_abs,
+        pack_format=format,
+        pack_level=compression_level,
     )
-    duration = time.monotonic() - start_ts
-
-    packed_bytes = os.path.getsize(packed_abs)
-    meta.update(
-        {
-            "packed_path": packed_rel,
-            "packed_bytes": packed_bytes,
-            "pack_format": format,
-            "pack_level": compression_level,
-            "status": "packed",
-        }
-    )
-    await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
-    logger.info(
-        "transfer repack done job_id=%s packed_bytes=%s duration=%.2fs",
-        job_id,
-        packed_bytes,
-        duration,
-    )
+    if not repack_ok:
+        return PlainTextResponse(status_code=500, content="Repack failed")
 
     return {
         "job_id": job_id,
@@ -712,6 +670,41 @@ async def _run_repack_job(
     packed_abs = tools.safe_path(MAIN_DIR, packed_rel)
 
     await _set_stage(job_id, "repacking")
+    is_zip = await anyio.to_thread.run_sync(tools.is_zip_file, download_abs)
+    if is_zip:
+        has_encrypted = await anyio.to_thread.run_sync(tools.zip_has_encrypted, download_abs)
+        if has_encrypted:
+            await _set_state(job_id, status="error", error="encrypted_zip")
+            await _broadcast(job_id, {"event": "error", "message": "zip encrypted"})
+            logger.warning("transfer repack denied (encrypted zip) job_id=%s", job_id)
+            return False, None, None
+        zip_ok = await anyio.to_thread.run_sync(tools.zip_uses_deflated_or_better, download_abs)
+        if zip_ok:
+            try:
+                packed_rel = os.path.relpath(download_abs, MAIN_DIR)
+                packed_abs = download_abs
+                packed_bytes = os.path.getsize(packed_abs)
+                meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+                meta.update(
+                    {
+                        "packed_path": packed_rel,
+                        "packed_bytes": packed_bytes,
+                        "pack_format": pack_format,
+                        "pack_level": pack_level,
+                        "status": "packed",
+                    }
+                )
+                await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+                await _set_stage(job_id, "packed")
+                logger.info(
+                    "transfer repack skipped (zip ok) job_id=%s packed_bytes=%s",
+                    job_id,
+                    packed_bytes,
+                )
+                return True, packed_rel, packed_bytes
+            except Exception:
+                logger.warning("failed to update meta for job_id=%s", job_id)
+
     if os.path.exists(packed_abs):
         packed_bytes = os.path.getsize(packed_abs)
         try:
@@ -732,12 +725,30 @@ async def _run_repack_job(
         return True, packed_rel, packed_bytes
 
     try:
+        repack_rel = os.path.join("temp", job_id, "repack")
+        repack_abs = tools.safe_path(MAIN_DIR, repack_rel)
+        if os.path.exists(repack_abs):
+            await anyio.to_thread.run_sync(shutil.rmtree, repack_abs)
+        os.makedirs(repack_abs, exist_ok=True)
+
+        if is_zip:
+            await anyio.to_thread.run_sync(tools.safe_extract_zip, download_abs, repack_abs)
+        else:
+            dest_name = os.path.basename(download_abs)
+            dest_path = os.path.join(repack_abs, dest_name)
+            await anyio.to_thread.run_sync(shutil.move, download_abs, dest_path)
+            try:
+                meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+                meta["download_path"] = os.path.relpath(dest_path, MAIN_DIR)
+                await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+            except Exception:
+                logger.warning("failed to update meta download_path for job_id=%s", job_id)
+
         start_ts = time.monotonic()
         await anyio.to_thread.run_sync(
-            tools.zip_single_file_with_level,
-            download_abs,
+            tools.zip_dir_with_level,
+            repack_abs,
             packed_abs,
-            os.path.basename(download_abs),
             pack_level,
         )
         duration = time.monotonic() - start_ts

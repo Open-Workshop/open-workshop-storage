@@ -3,7 +3,7 @@ import re
 import shutil
 from typing import Optional, Any
 from datetime import datetime, timedelta, timezone
-from zipfile import ZipFile, ZIP_DEFLATED
+from zipfile import ZipFile, ZIP_DEFLATED, ZIP_LZMA, ZIP_BZIP2, ZIP_STORED, BadZipFile, is_zipfile
 import ow_config as config
 import bcrypt
 import jwt
@@ -36,6 +36,76 @@ def zip_single_file_with_level(
 ) -> None:
     with ZipFile(dest_zip_path, "w", compression=ZIP_DEFLATED, compresslevel=compresslevel) as zipped:
         zipped.write(src_path, arcname)
+
+
+def zip_dir_with_level(src_dir: str, dest_zip_path: str, compresslevel: int = 3) -> None:
+    src_dir = os.path.abspath(src_dir)
+    with ZipFile(dest_zip_path, "w", compression=ZIP_DEFLATED, compresslevel=compresslevel) as zipped:
+        for root, dirs, files in os.walk(src_dir):
+            rel_root = os.path.relpath(root, src_dir)
+            rel_root = "" if rel_root == "." else rel_root
+
+            if not files and not dirs:
+                arc_dir = rel_root + "/" if rel_root else ""
+                if arc_dir:
+                    zipped.writestr(arc_dir, "")
+                continue
+
+            for filename in files:
+                abs_path = os.path.join(root, filename)
+                arcname = os.path.join(rel_root, filename) if rel_root else filename
+                zipped.write(abs_path, arcname)
+
+
+def is_zip_file(path: str) -> bool:
+    return os.path.isfile(path) and is_zipfile(path)
+
+
+def zip_uses_deflated_or_better(path: str) -> bool:
+    try:
+        with ZipFile(path, "r") as zipped:
+            for info in zipped.infolist():
+                if info.is_dir():
+                    continue
+                if info.flag_bits & 0x1:
+                    return False
+                if info.compress_type in (ZIP_DEFLATED, ZIP_LZMA, ZIP_BZIP2):
+                    continue
+                if info.compress_type == ZIP_STORED and info.file_size == 0:
+                    continue
+                return False
+        return True
+    except BadZipFile:
+        return False
+
+
+def zip_has_encrypted(path: str) -> bool:
+    try:
+        with ZipFile(path, "r") as zipped:
+            for info in zipped.infolist():
+                if info.flag_bits & 0x1:
+                    return True
+        return False
+    except BadZipFile:
+        return False
+
+
+def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
+    dest_dir = os.path.abspath(dest_dir)
+    with ZipFile(zip_path, "r") as zipped:
+        for info in zipped.infolist():
+            if info.flag_bits & 0x1:
+                raise ValueError("Encrypted zip entries are not supported")
+            name = info.filename.replace("\\", "/")
+            target_path = os.path.abspath(os.path.join(dest_dir, name))
+            if os.path.commonpath([target_path, dest_dir]) != dest_dir:
+                raise ValueError("Unsafe path in zip")
+            if info.is_dir():
+                os.makedirs(target_path, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            with zipped.open(info, "r") as src, open(target_path, "wb") as dst:
+                shutil.copyfileobj(src, dst)
 
 
 def is_allowed_type(type_name: str) -> bool:
