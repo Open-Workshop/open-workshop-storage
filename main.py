@@ -49,8 +49,13 @@ async def _check_7z_dependency() -> None:
 
 @app.middleware("http")
 async def modify_header(request: Request, call_next):
-    response = await call_next(request)
+    if request.method == "OPTIONS":
+        response = PlainTextResponse(status_code=200, content="OK")
+    else:
+        response = await call_next(request)
     response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization,X-File-Name"
     response.headers["Access-Control-Expose-Headers"] = "Content-Type,Content-Disposition"
     return response
 
@@ -158,13 +163,13 @@ async def transfer_start(request: Request):
 
 
 @app.post("/transfer/upload")
-async def transfer_upload(
-    request: Request,
-    file: UploadFile = File(...),
-    token: Optional[str] = Form(None),
-):
+async def transfer_upload(request: Request):
     client = request.client.host if request.client else "unknown"
-    token = token or request.query_params.get("token")
+    token = request.query_params.get("token")
+    if not token:
+        auth = request.headers.get("Authorization") or ""
+        if auth.startswith("Bearer "):
+            token = auth.split(" ", 1)[1].strip()
     if not token:
         logger.warning("transfer upload denied (token missing) client=%s", client)
         return PlainTextResponse(status_code=401, content="Token not found")
@@ -198,7 +203,8 @@ async def transfer_upload(
     if max_bytes is not None and max_bytes <= 0:
         max_bytes = None
 
-    safe_name = tools.sanitize_filename(file.filename)
+    filename = request.query_params.get("filename") or request.headers.get("X-File-Name")
+    safe_name = tools.sanitize_filename(filename, default="upload.bin")
     upload_rel = os.path.join("temp", job_id, safe_name)
     upload_abs = tools.safe_path(MAIN_DIR, upload_rel)
 
@@ -261,10 +267,9 @@ async def transfer_upload(
     try:
         os.makedirs(os.path.dirname(upload_abs), exist_ok=True)
         with open(upload_abs, "wb") as out_file:
-            while True:
-                chunk = await file.read(1024 * 256)
+            async for chunk in request.stream():
                 if not chunk:
-                    break
+                    continue
                 downloaded += len(chunk)
                 if max_bytes and downloaded > max_bytes:
                     await _set_state(job_id, status="error", error="size_limit")
