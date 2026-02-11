@@ -1,9 +1,10 @@
 import os
 import re
 import shutil
+import subprocess
+import tempfile
 from typing import Optional, Any
 from datetime import datetime, timedelta, timezone
-from zipfile import ZipFile, ZIP_DEFLATED, ZIP_LZMA, ZIP_BZIP2, ZIP_STORED, BadZipFile, is_zipfile
 import ow_config as config
 import bcrypt
 import jwt
@@ -13,6 +14,7 @@ ALLOWED_TYPES = {"archive", "resource", "avatar"}
 ALLOWED_UPLOAD_TYPES = {"resource", "avatar"}
 ALLOWED_FILENAME_CHARS_WITH_DOT = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.")
 TRANSFER_JWT_ALG = "HS256"
+SEVEN_ZIP_BIN = "7z"
 
 
 def safe_path(base_dir: str, path: str) -> str:
@@ -28,84 +30,166 @@ def copy_fileobj_to_path(fileobj, dest_path: str) -> None:
         shutil.copyfileobj(fileobj, buffer)
 
 
+def ensure_7z_available() -> None:
+    if shutil.which(SEVEN_ZIP_BIN) is None:
+        raise RuntimeError("7z binary is required but not found in PATH")
+
+
+def _run_7z(args: list[str], cwd: Optional[str] = None) -> subprocess.CompletedProcess:
+    ensure_7z_available()
+    return subprocess.run(
+        [SEVEN_ZIP_BIN, *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _list_7z_entries(zip_path: str) -> Optional[list[dict[str, str]]]:
+    result = _run_7z(["l", "-slt", "-tzip", zip_path])
+    if result.returncode != 0:
+        return None
+    entries: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            if current:
+                entries.append(current)
+                current = {}
+            continue
+        if " = " in line:
+            key, value = line.split(" = ", 1)
+            current[key] = value
+    if current:
+        entries.append(current)
+    if entries and entries[0].get("Type") == "zip":
+        entries = entries[1:]
+    return entries
+
+
 def zip_single_file_with_level(
     src_path: str,
     dest_zip_path: str,
     arcname: str,
     compresslevel: int = 3,
 ) -> None:
-    with ZipFile(dest_zip_path, "w", compression=ZIP_DEFLATED, compresslevel=compresslevel) as zipped:
-        zipped.write(src_path, arcname)
+    os.makedirs(os.path.dirname(dest_zip_path), exist_ok=True)
+    if os.path.exists(dest_zip_path):
+        os.remove(dest_zip_path)
+    src_dir = os.path.dirname(src_path) or "."
+    src_name = os.path.basename(src_path)
+    if arcname == src_name:
+        result = _run_7z(
+            [
+                "a",
+                "-tzip",
+                "-mm=Deflate",
+                f"-mx={compresslevel}",
+                "-mmt=on",
+                dest_zip_path,
+                src_name,
+            ],
+            cwd=src_dir,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "7z failed to create zip")
+        return
+    with tempfile.TemporaryDirectory() as temp_dir:
+        tmp_path = os.path.join(temp_dir, arcname)
+        os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
+        shutil.copy2(src_path, tmp_path)
+        zip_dir_with_level(temp_dir, dest_zip_path, compresslevel)
 
 
 def zip_dir_with_level(src_dir: str, dest_zip_path: str, compresslevel: int = 3) -> None:
     src_dir = os.path.abspath(src_dir)
-    with ZipFile(dest_zip_path, "w", compression=ZIP_DEFLATED, compresslevel=compresslevel) as zipped:
-        for root, dirs, files in os.walk(src_dir):
-            rel_root = os.path.relpath(root, src_dir)
-            rel_root = "" if rel_root == "." else rel_root
-
-            if not files and not dirs:
-                arc_dir = rel_root + "/" if rel_root else ""
-                if arc_dir:
-                    zipped.writestr(arc_dir, "")
-                continue
-
-            for filename in files:
-                abs_path = os.path.join(root, filename)
-                arcname = os.path.join(rel_root, filename) if rel_root else filename
-                zipped.write(abs_path, arcname)
+    os.makedirs(os.path.dirname(dest_zip_path), exist_ok=True)
+    if os.path.exists(dest_zip_path):
+        os.remove(dest_zip_path)
+    result = _run_7z(
+        [
+            "a",
+            "-tzip",
+            "-mm=Deflate",
+            f"-mx={compresslevel}",
+            "-mmt=on",
+            dest_zip_path,
+            ".",
+        ],
+        cwd=src_dir,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "7z failed to create zip")
 
 
 def is_zip_file(path: str) -> bool:
-    return os.path.isfile(path) and is_zipfile(path)
+    if not os.path.isfile(path):
+        return False
+    try:
+        with open(path, "rb") as handle:
+            signature = handle.read(4)
+        return signature in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+    except OSError:
+        return False
 
 
 def zip_uses_deflated_or_better(path: str) -> bool:
-    try:
-        with ZipFile(path, "r") as zipped:
-            for info in zipped.infolist():
-                if info.is_dir():
-                    continue
-                if info.flag_bits & 0x1:
-                    return False
-                if info.compress_type in (ZIP_DEFLATED, ZIP_LZMA, ZIP_BZIP2):
-                    continue
-                if info.compress_type == ZIP_STORED and info.file_size == 0:
-                    continue
-                return False
-        return True
-    except BadZipFile:
+    entries = _list_7z_entries(path)
+    if not entries:
         return False
+
+    for entry in entries:
+        if entry.get("Folder") == "+":
+            continue
+        if entry.get("Encrypted") == "+":
+            return False
+        method = (entry.get("Method") or "").lower()
+        if not method:
+            return False
+        if "deflate" in method:
+            continue
+        if "lzma" in method or "bzip2" in method or "ppmd" in method:
+            continue
+        if "store" in method:
+            try:
+                size = int(entry.get("Size", "0"))
+            except ValueError:
+                size = 0
+            if size == 0:
+                continue
+        return False
+    return True
 
 
 def zip_has_encrypted(path: str) -> bool:
-    try:
-        with ZipFile(path, "r") as zipped:
-            for info in zipped.infolist():
-                if info.flag_bits & 0x1:
-                    return True
-        return False
-    except BadZipFile:
-        return False
+    entries = _list_7z_entries(path)
+    if entries is None:
+        return True
+    for entry in entries:
+        if entry.get("Encrypted") == "+":
+            return True
+    return False
 
 
 def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
     dest_dir = os.path.abspath(dest_dir)
-    with ZipFile(zip_path, "r") as zipped:
-        for info in zipped.infolist():
-            if info.flag_bits & 0x1:
-                raise ValueError("Encrypted zip entries are not supported")
-            name = info.filename.replace("\\", "/")
-            target_path = os.path.abspath(os.path.join(dest_dir, name))
-            if os.path.commonpath([target_path, dest_dir]) != dest_dir:
-                raise ValueError("Unsafe path in zip")
-            if info.is_dir():
-                os.makedirs(target_path, exist_ok=True)
-                continue
-            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-            with zipped.open(info, "r") as src, open(target_path, "wb") as dst:
-                shutil.copyfileobj(src, dst)
+    entries = _list_7z_entries(zip_path)
+    if entries is None:
+        raise ValueError("Invalid zip archive")
+    for entry in entries:
+        if entry.get("Encrypted") == "+":
+            raise ValueError("Encrypted zip entries are not supported")
+        name = (entry.get("Path") or "").replace("\\", "/")
+        if not name:
+            continue
+        target_path = os.path.abspath(os.path.join(dest_dir, name))
+        if os.path.commonpath([target_path, dest_dir]) != dest_dir:
+            raise ValueError("Unsafe path in zip")
+    os.makedirs(dest_dir, exist_ok=True)
+    result = _run_7z(["x", "-tzip", f"-o{dest_dir}", "-y", zip_path])
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "7z failed to extract zip")
 
 
 def is_allowed_type(type_name: str) -> bool:

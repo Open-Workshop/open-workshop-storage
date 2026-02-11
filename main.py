@@ -38,6 +38,15 @@ app = FastAPI(
     docs_url="/"
 )
 
+
+@app.on_event("startup")
+async def _check_7z_dependency() -> None:
+    try:
+        tools.ensure_7z_available()
+    except Exception as exc:
+        logger.error("7z dependency missing: %s", exc)
+        raise
+
 @app.middleware("http")
 async def modify_header(request: Request, call_next):
     response = await call_next(request)
@@ -329,9 +338,37 @@ async def transfer_upload(
             downloaded,
             duration,
         )
+
+        is_zip = await anyio.to_thread.run_sync(tools.is_zip_file, upload_abs)
+        if is_zip:
+            has_encrypted = await anyio.to_thread.run_sync(tools.zip_has_encrypted, upload_abs)
+            if has_encrypted:
+                await _set_state(job_id, status="error", error="encrypted_zip")
+                await _broadcast(job_id, {"event": "error", "message": "zip encrypted"})
+                try:
+                    meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+                    meta.update({"status": "error", "error_reason": "encrypted_zip"})
+                    await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+                except Exception:
+                    logger.warning("failed to update meta for job_id=%s", job_id)
+                try:
+                    if os.path.exists(upload_abs):
+                        os.remove(upload_abs)
+                except Exception:
+                    logger.warning("failed to cleanup encrypted zip job_id=%s", job_id)
+                await _notify_manager(
+                    {
+                        **callback_payload,
+                        "job_id": job_id,
+                        "status": "error",
+                        "reason": "encrypted_zip",
+                    }
+                )
+                return PlainTextResponse(status_code=400, content="Encrypted zip not allowed")
+
         await _set_stage(job_id, "uploaded")
 
-        repack_ok, _, _ = await _run_repack_job(
+        repack_ok, _, _, repack_reason = await _run_repack_job(
             job_id=job_id,
             download_abs=upload_abs,
             pack_format=pack_format,
@@ -343,9 +380,11 @@ async def transfer_upload(
                     **callback_payload,
                     "job_id": job_id,
                     "status": "error",
-                    "reason": "repack_failed",
+                    "reason": repack_reason or "repack_failed",
                 }
             )
+            if repack_reason == "encrypted_zip":
+                return PlainTextResponse(status_code=400, content="Encrypted zip not allowed")
             return PlainTextResponse(status_code=500, content="Repack failed")
 
         await _broadcast(
@@ -492,13 +531,15 @@ async def transfer_repack(
         compression_level,
         client,
     )
-    repack_ok, packed_rel, packed_bytes = await _run_repack_job(
+    repack_ok, packed_rel, packed_bytes, repack_reason = await _run_repack_job(
         job_id=job_id,
         download_abs=download_abs,
         pack_format=format,
         pack_level=compression_level,
     )
     if not repack_ok:
+        if repack_reason == "encrypted_zip":
+            return PlainTextResponse(status_code=400, content="Encrypted zip not allowed")
         return PlainTextResponse(status_code=500, content="Repack failed")
 
     return {
@@ -660,11 +701,11 @@ async def _run_repack_job(
     download_abs: str,
     pack_format: str,
     pack_level: int,
-) -> tuple[bool, Optional[str], Optional[int]]:
+) -> tuple[bool, Optional[str], Optional[int], Optional[str]]:
     if pack_format != "zip":
         await _set_state(job_id, status="error", error="unsupported_format")
         await _broadcast(job_id, {"event": "error", "message": "unsupported format"})
-        return False, None, None
+        return False, None, None, "unsupported_format"
 
     packed_rel = os.path.join("temp", job_id, "packed.zip")
     packed_abs = tools.safe_path(MAIN_DIR, packed_rel)
@@ -676,8 +717,14 @@ async def _run_repack_job(
         if has_encrypted:
             await _set_state(job_id, status="error", error="encrypted_zip")
             await _broadcast(job_id, {"event": "error", "message": "zip encrypted"})
+            try:
+                meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+                meta.update({"status": "error", "error_reason": "encrypted_zip"})
+                await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+            except Exception:
+                logger.warning("failed to update meta for job_id=%s", job_id)
             logger.warning("transfer repack denied (encrypted zip) job_id=%s", job_id)
-            return False, None, None
+            return False, None, None, "encrypted_zip"
         zip_ok = await anyio.to_thread.run_sync(tools.zip_uses_deflated_or_better, download_abs)
         if zip_ok:
             try:
@@ -701,7 +748,7 @@ async def _run_repack_job(
                     job_id,
                     packed_bytes,
                 )
-                return True, packed_rel, packed_bytes
+                return True, packed_rel, packed_bytes, None
             except Exception:
                 logger.warning("failed to update meta for job_id=%s", job_id)
 
@@ -722,7 +769,7 @@ async def _run_repack_job(
         except Exception:
             logger.warning("failed to update meta for job_id=%s", job_id)
         await _set_stage(job_id, "packed")
-        return True, packed_rel, packed_bytes
+        return True, packed_rel, packed_bytes, None
 
     try:
         repack_rel = os.path.join("temp", job_id, "repack")
@@ -774,12 +821,12 @@ async def _run_repack_job(
             packed_bytes,
             duration,
         )
-        return True, packed_rel, packed_bytes
+        return True, packed_rel, packed_bytes, None
     except Exception as exc:
         logger.exception("transfer repack failed job_id=%s", job_id)
         await _set_state(job_id, status="error", error=str(exc))
         await _broadcast(job_id, {"event": "error", "message": "repack failed"})
-        return False, None, None
+        return False, None, None, "repack_failed"
 
 
 async def _notify_manager(payload: dict[str, Any]) -> None:
@@ -940,19 +987,25 @@ async def _run_download_job(
             logger.warning("failed to update meta for job_id=%s", job_id)
         await _set_stage(job_id, "downloaded")
 
-        repack_ok, _, _ = await _run_repack_job(
+        repack_ok, _, _, repack_reason = await _run_repack_job(
             job_id=job_id,
             download_abs=download_abs,
             pack_format=callback_payload.get("pack_format", "zip"),
             pack_level=int(callback_payload.get("pack_level", 3)),
         )
         if not repack_ok:
+            if repack_reason == "encrypted_zip":
+                try:
+                    if os.path.exists(download_abs):
+                        os.remove(download_abs)
+                except Exception:
+                    logger.warning("failed to cleanup encrypted zip job_id=%s", job_id)
             await _notify_manager(
                 {
                     **callback_payload,
                     "job_id": job_id,
                     "status": "error",
-                    "reason": "repack_failed",
+                    "reason": repack_reason or "repack_failed",
                 }
             )
             return
