@@ -344,7 +344,7 @@ async def transfer_upload(request: Request):
             duration,
         )
 
-        archive_type, is_encrypted = await anyio.to_thread.run_sync(
+        archive_type, is_encrypted, archive_entries = await anyio.to_thread.run_sync(
             tools.probe_archive, upload_abs
         )
         if is_encrypted:
@@ -716,7 +716,7 @@ async def _run_repack_job(
     packed_abs = tools.safe_path(MAIN_DIR, packed_rel)
 
     await _set_stage(job_id, "repacking")
-    archive_type, is_encrypted = await anyio.to_thread.run_sync(
+    archive_type, is_encrypted, archive_entries = await anyio.to_thread.run_sync(
         tools.probe_archive, download_abs
     )
     if is_encrypted:
@@ -731,7 +731,11 @@ async def _run_repack_job(
         logger.warning("transfer repack denied (encrypted zip) job_id=%s", job_id)
         return False, None, None, "encrypted_zip"
     if archive_type == "zip":
-        zip_ok = await anyio.to_thread.run_sync(tools.zip_uses_deflated_or_better, download_abs)
+        zip_ok = await anyio.to_thread.run_sync(
+            tools.zip_uses_deflated_or_better,
+            download_abs,
+            entries=archive_entries,
+        )
         if zip_ok:
             try:
                 packed_rel = os.path.relpath(download_abs, MAIN_DIR)
@@ -785,7 +789,12 @@ async def _run_repack_job(
         os.makedirs(repack_abs, exist_ok=True)
 
         if archive_type:
-            await anyio.to_thread.run_sync(tools.safe_extract_archive, download_abs, repack_abs)
+            await anyio.to_thread.run_sync(
+                tools.safe_extract_archive,
+                download_abs,
+                repack_abs,
+                entries=archive_entries,
+            )
         else:
             dest_name = os.path.basename(download_abs)
             dest_path = os.path.join(repack_abs, dest_name)

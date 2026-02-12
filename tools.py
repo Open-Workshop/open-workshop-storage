@@ -2,7 +2,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 from typing import Optional, Any
 from datetime import datetime, timedelta, timezone
 import ow_config as config
@@ -80,13 +79,13 @@ def _list_7z_entries(path: str, archive_type: Optional[str] = None) -> Optional[
     return entries
 
 
-def probe_archive(path: str) -> tuple[Optional[str], bool]:
+def probe_archive(path: str) -> tuple[Optional[str], bool, Optional[list[dict[str, str]]]]:
     entries, error, code = _run_7z_list(path)
     if code != 0 or not entries:
         lowered = error.lower()
         if "password" in lowered or "encrypted" in lowered:
-            return None, True
-        return None, False
+            return None, True, None
+        return None, False, None
     archive_type = entries[0].get("Type")
     archive_type = archive_type.lower() if archive_type else None
     encrypted = False
@@ -94,47 +93,7 @@ def probe_archive(path: str) -> tuple[Optional[str], bool]:
         if entry.get("Encrypted") == "+":
             encrypted = True
             break
-    return archive_type, encrypted
-
-
-def detect_archive_type(path: str) -> Optional[str]:
-    archive_type, _ = probe_archive(path)
-    return archive_type
-
-
-def zip_single_file_with_level(
-    src_path: str,
-    dest_zip_path: str,
-    arcname: str,
-    compresslevel: int = 3,
-) -> None:
-    os.makedirs(os.path.dirname(dest_zip_path), exist_ok=True)
-    if os.path.exists(dest_zip_path):
-        os.remove(dest_zip_path)
-    src_dir = os.path.dirname(src_path) or "."
-    src_name = os.path.basename(src_path)
-    if arcname == src_name:
-        result = _run_7z(
-            [
-                "a",
-                "-tzip",
-                "-mm=Deflate",
-                f"-mx={compresslevel}",
-                "-mmt=on",
-                dest_zip_path,
-                src_name,
-            ],
-            cwd=src_dir,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or "7z failed to create zip")
-        return
-    with tempfile.TemporaryDirectory() as temp_dir:
-        tmp_path = os.path.join(temp_dir, arcname)
-        os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
-        shutil.copy2(src_path, tmp_path)
-        zip_dir_with_level(temp_dir, dest_zip_path, compresslevel)
-
+    return archive_type, encrypted, entries
 
 def zip_dir_with_level(src_dir: str, dest_zip_path: str, compresslevel: int = 3) -> None:
     src_dir = os.path.abspath(src_dir)
@@ -157,16 +116,10 @@ def zip_dir_with_level(src_dir: str, dest_zip_path: str, compresslevel: int = 3)
         raise RuntimeError(result.stderr.strip() or "7z failed to create zip")
 
 
-def is_zip_file(path: str) -> bool:
-    return detect_archive_type(path) == "zip"
-
-
-def is_archive_file(path: str) -> bool:
-    return detect_archive_type(path) is not None
-
-
-def zip_uses_deflated_or_better(path: str) -> bool:
-    entries = _list_7z_entries(path, archive_type="zip")
+def zip_uses_deflated_or_better(
+    path: str, *, entries: Optional[list[dict[str, str]]] = None
+) -> bool:
+    entries = entries or _list_7z_entries(path, archive_type="zip")
     if not entries:
         return False
 
@@ -197,15 +150,6 @@ def zip_uses_deflated_or_better(path: str) -> bool:
     return True
 
 
-def archive_has_encrypted(path: str) -> bool:
-    _, encrypted = probe_archive(path)
-    return encrypted
-
-
-def zip_has_encrypted(path: str) -> bool:
-    return archive_has_encrypted(path)
-
-
 def _find_single_tar(dest_dir: str) -> Optional[str]:
     entries = os.listdir(dest_dir)
     if len(entries) != 1:
@@ -216,9 +160,14 @@ def _find_single_tar(dest_dir: str) -> Optional[str]:
     return None
 
 
-def safe_extract_archive(archive_path: str, dest_dir: str) -> None:
+def safe_extract_archive(
+    archive_path: str,
+    dest_dir: str,
+    *,
+    entries: Optional[list[dict[str, str]]] = None,
+) -> None:
     dest_dir = os.path.abspath(dest_dir)
-    entries = _list_7z_entries(archive_path)
+    entries = entries or _list_7z_entries(archive_path)
     if entries is None:
         raise ValueError("Invalid archive")
     for entry in entries:
