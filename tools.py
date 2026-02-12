@@ -117,7 +117,7 @@ def zip_dir_with_level(src_dir: str, dest_zip_path: str, compresslevel: int = 3)
 
 
 def zip_uses_deflated_or_better(
-    path: str, *, entries: Optional[list[dict[str, str]]] = None
+    path: str, entries: Optional[list[dict[str, str]]] = None
 ) -> bool:
     entries = entries or _list_7z_entries(path, archive_type="zip")
     if not entries:
@@ -163,7 +163,6 @@ def _find_single_tar(dest_dir: str) -> Optional[str]:
 def safe_extract_archive(
     archive_path: str,
     dest_dir: str,
-    *,
     entries: Optional[list[dict[str, str]]] = None,
 ) -> None:
     dest_dir = os.path.abspath(dest_dir)

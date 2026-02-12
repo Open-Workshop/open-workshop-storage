@@ -930,7 +930,7 @@ async def _run_repack_job(
         zip_ok = await anyio.to_thread.run_sync(
             tools.zip_uses_deflated_or_better,
             download_abs,
-            entries=archive_entries,
+            archive_entries,
         )
         if zip_ok:
             try:
@@ -989,7 +989,7 @@ async def _run_repack_job(
                 tools.safe_extract_archive,
                 download_abs,
                 repack_abs,
-                entries=archive_entries,
+                archive_entries,
             )
         else:
             dest_name = os.path.basename(download_abs)
