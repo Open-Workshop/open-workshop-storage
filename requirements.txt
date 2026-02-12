@@ -3,3 +3,7 @@ fastapi[standard]
 aiohttp
 gunicorn[standard]
 anyio
+PyJWT
+
+# System dependency (required at runtime):
+# 7z (p7zip / p7zip-full)

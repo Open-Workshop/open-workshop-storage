@@ -37,6 +37,12 @@ def generate_token_pairs():
         'plain': upload_file_token,
         'hashed': hash_token(upload_file_token)
     }
+
+    storage_manage_token = generate_token()
+    tokens['storage_manage_token'] = {
+        'plain': storage_manage_token,
+        'hashed': hash_token(storage_manage_token)
+    }
     
     return tokens
 
