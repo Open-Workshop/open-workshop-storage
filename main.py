@@ -70,8 +70,84 @@ async def _extract_token(request: Request) -> Optional[str]:
     return None
 
 
-@app.get("/transfer/start")
-@app.post("/transfer/start")
+@app.get(
+    "/transfer/start",
+    tags=["Transfer"],
+    summary="Start transfer from URL",
+    description=(
+        "Starts a background download from the URL embedded in the transfer JWT. "
+        "JWT must contain: job_id, mod_id (optional), download_url, pack_format, pack_level. "
+        "Token can be passed as query param `token` or form field `token` for POST. "
+        "Returns job_id and WebSocket URL for progress updates."
+    ),
+    responses={
+        200: {
+            "description": "Transfer started",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "job_id": "3f2c1b7a0c9f4c7c8e5f1a2b3c4d5e6f",
+                        "status": "started",
+                        "ws_url": "/transfer/ws/3f2c1b7a0c9f4c7c8e5f1a2b3c4d5e6f",
+                    }
+                }
+            },
+        },
+        400: {"description": "Invalid request", "content": {"text/plain": {"example": "Invalid job id"}}},
+        401: {"description": "Token not found", "content": {"text/plain": {"example": "Token not found"}}},
+        403: {"description": "Access denied", "content": {"text/plain": {"example": "Access denied"}}},
+    },
+    openapi_extra={
+        "parameters": [
+            {
+                "name": "token",
+                "in": "query",
+                "required": False,
+                "schema": {"type": "string"},
+                "description": "Transfer JWT (can also be sent in form body for POST).",
+            }
+        ]
+    },
+)
+@app.post(
+    "/transfer/start",
+    tags=["Transfer"],
+    summary="Start transfer from URL",
+    description=(
+        "Starts a background download from the URL embedded in the transfer JWT. "
+        "JWT must contain: job_id, mod_id (optional), download_url, pack_format, pack_level. "
+        "Token can be passed as query param `token` or form field `token` for POST. "
+        "Returns job_id and WebSocket URL for progress updates."
+    ),
+    responses={
+        200: {
+            "description": "Transfer started",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "job_id": "3f2c1b7a0c9f4c7c8e5f1a2b3c4d5e6f",
+                        "status": "started",
+                        "ws_url": "/transfer/ws/3f2c1b7a0c9f4c7c8e5f1a2b3c4d5e6f",
+                    }
+                }
+            },
+        },
+        400: {"description": "Invalid request", "content": {"text/plain": {"example": "Invalid job id"}}},
+        401: {"description": "Token not found", "content": {"text/plain": {"example": "Token not found"}}},
+        403: {"description": "Access denied", "content": {"text/plain": {"example": "Access denied"}}},
+    },
+    openapi_extra={
+        "parameters": [
+            {
+                "name": "token",
+                "in": "query",
+                "required": False,
+                "schema": {"type": "string"},
+                "description": "Transfer JWT (can also be sent in form body for POST).",
+            }
+        ]
+    },
+)
 async def transfer_start(request: Request):
     token = await _extract_token(request)
     if not token:
@@ -162,7 +238,73 @@ async def transfer_start(request: Request):
     }
 
 
-@app.post("/transfer/upload")
+@app.post(
+    "/transfer/upload",
+    tags=["Transfer"],
+    summary="Upload file to Storage (raw body)",
+    description=(
+        "Uploads a file stream directly to Storage. "
+        "Request body must be raw binary (application/octet-stream). "
+        "Token can be passed via query `token` or `Authorization: Bearer <token>`. "
+        "Optional filename can be passed via query `filename` or header `X-File-Name`. "
+        "Returns job_id and byte counters. Progress is available via WebSocket."
+    ),
+    responses={
+        200: {
+            "description": "Upload accepted",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "job_id": "3f2c1b7a0c9f4c7c8e5f1a2b3c4d5e6f",
+                        "bytes": 123456,
+                        "total": 654321,
+                    }
+                }
+            },
+        },
+        400: {"description": "Invalid request", "content": {"text/plain": {"example": "Invalid job id"}}},
+        401: {"description": "Token not found", "content": {"text/plain": {"example": "Token not found"}}},
+        403: {"description": "Access denied", "content": {"text/plain": {"example": "Access denied"}}},
+        413: {"description": "File too large", "content": {"text/plain": {"example": "File too large"}}},
+        500: {"description": "Server error", "content": {"text/plain": {"example": "Upload failed"}}},
+    },
+    openapi_extra={
+        "parameters": [
+            {
+                "name": "token",
+                "in": "query",
+                "required": False,
+                "schema": {"type": "string"},
+                "description": "Transfer JWT (or use Authorization: Bearer <token>).",
+            },
+            {
+                "name": "filename",
+                "in": "query",
+                "required": False,
+                "schema": {"type": "string"},
+                "description": "Original filename (optional).",
+            },
+            {
+                "name": "Authorization",
+                "in": "header",
+                "required": False,
+                "schema": {"type": "string"},
+                "description": "Bearer <transfer_jwt> (alternative to query token).",
+            },
+            {
+                "name": "X-File-Name",
+                "in": "header",
+                "required": False,
+                "schema": {"type": "string"},
+                "description": "Original filename (alternative to query filename).",
+            },
+        ],
+        "requestBody": {
+            "required": True,
+            "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}},
+        }
+    },
+)
 async def transfer_upload(request: Request):
     client = request.client.host if request.client else "unknown"
     token = request.query_params.get("token")
@@ -492,7 +634,34 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
         logger.info("transfer ws disconnect job_id=%s", job_id)
 
 
-@app.post("/transfer/repack")
+@app.post(
+    "/transfer/repack",
+    tags=["Transfer"],
+    summary="Repack uploaded file",
+    description=(
+        "Repackages the uploaded file into a ZIP archive. "
+        "Intended for manager-side maintenance. Requires `storage_manage_token`."
+    ),
+    responses={
+        200: {
+            "description": "Repack complete",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "job_id": "3f2c1b7a0c9f4c7c8e5f1a2b3c4d5e6f",
+                        "packed_bytes": 123456,
+                        "packed_path": "temp/3f2c1b7a0c9f4c7c8e5f1a2b3c4d5e6f/packed.zip",
+                    }
+                }
+            },
+        },
+        400: {"description": "Invalid request", "content": {"text/plain": {"example": "Invalid job id"}}},
+        401: {"description": "Token not found", "content": {"text/plain": {"example": "Token not found"}}},
+        403: {"description": "Access denied", "content": {"text/plain": {"example": "Access denied"}}},
+        404: {"description": "Job not found", "content": {"text/plain": {"example": "Job not found"}}},
+        500: {"description": "Repack failed", "content": {"text/plain": {"example": "Repack failed"}}},
+    },
+)
 async def transfer_repack(
     request: Request,
     job_id: str = Form(),
@@ -554,7 +723,34 @@ async def transfer_repack(
     }
 
 
-@app.post("/transfer/move")
+@app.post(
+    "/transfer/move",
+    tags=["Transfer"],
+    summary="Move packed archive to permanent storage",
+    description=(
+        "Moves repacked file to permanent storage path. "
+        "Requires `storage_manage_token` and a valid job_id."
+    ),
+    responses={
+        200: {
+            "description": "Move complete",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "job_id": "3f2c1b7a0c9f4c7c8e5f1a2b3c4d5e6f",
+                        "final_path": "archive/mods/1234/main.zip",
+                        "final_bytes": 123456,
+                    }
+                }
+            },
+        },
+        400: {"description": "Invalid request", "content": {"text/plain": {"example": "Invalid type"}}},
+        401: {"description": "Token not found", "content": {"text/plain": {"example": "Token not found"}}},
+        403: {"description": "Access denied", "content": {"text/plain": {"example": "Access denied"}}},
+        404: {"description": "Job not found", "content": {"text/plain": {"example": "Job not found"}}},
+        423: {"description": "Access denied", "content": {"text/plain": {"example": "Access denied"}}},
+    },
+)
 async def transfer_move(
     request: Request,
     job_id: str = Form(),
@@ -1073,6 +1269,12 @@ async def _run_download_job(
 
 @app.get(
     "/download/{type}/{path:path}",
+    tags=["Files"],
+    summary="Download stored file",
+    description=(
+        "Downloads a stored file. For archive/mod downloads access is validated via Manager. "
+        "Optional query param `filename` can be used to override download name (safe chars only)."
+    ),
     status_code=200,
     response_class=FileResponse,
     responses={
@@ -1158,10 +1360,16 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
         return PlainTextResponse(status_code=404, content="File not found")
 
 @app.post(
-    "/upload", 
-    status_code=201, 
-    response_class=PlainTextResponse, 
-    response_model=str, 
+    "/upload",
+    tags=["Files"],
+    summary="Upload file to Storage (internal)",
+    description=(
+        "Internal upload endpoint for Manager. "
+        "Accepts multipart form-data with file, type and path. Requires upload token."
+    ),
+    status_code=201,
+    response_class=PlainTextResponse,
+    response_model=str,
     responses={
         201: {
             "description": "File uploaded successfully", 
@@ -1217,6 +1425,12 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
 
 @app.delete(
     "/delete",
+    tags=["Files"],
+    summary="Delete file from Storage (internal)",
+    description=(
+        "Internal delete endpoint for Manager. "
+        "Deletes file and empty parent folders. Requires delete token."
+    ),
     status_code=200,
     response_class=PlainTextResponse,
     response_model=str,

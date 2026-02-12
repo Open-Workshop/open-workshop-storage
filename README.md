@@ -2,7 +2,7 @@
 
 ## Requirements
 - Python 3.10+
-- System dependency: 7z (p7zip)
+- System dependency: 7z (p7zip-full)
 
 ### Ubuntu / Debian
 ```bash
