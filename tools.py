@@ -11,7 +11,7 @@ import jwt
 ALLOWED_FILENAME_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 ALLOWED_TYPES = {"archive", "resource", "avatar"}
 ALLOWED_UPLOAD_TYPES = {"resource", "avatar"}
-ALLOWED_FILENAME_CHARS_WITH_DOT = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.")
+ALLOWED_FILENAME_CHARS_WITH_DOT = ALLOWED_FILENAME_CHARS | {"."}
 TRANSFER_JWT_ALG = "HS256"
 SEVEN_ZIP_BIN = "7z"
 
@@ -194,8 +194,6 @@ def safe_extract_archive(
             os.remove(tar_path)
 
 
-def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
-    safe_extract_archive(zip_path, dest_dir)
 
 
 def is_allowed_type(type_name: str) -> bool:
