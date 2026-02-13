@@ -4,6 +4,11 @@ aiohttp
 gunicorn[standard]
 anyio
 PyJWT
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-aiohttp-client
 
 # System dependency (required at runtime):
 # 7z (p7zip / p7zip-full)

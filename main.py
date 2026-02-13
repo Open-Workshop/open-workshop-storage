@@ -12,6 +12,7 @@ import tools
 import ow_config as config
 from fastapi import FastAPI, Request, UploadFile, Form, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse
+from telemetry import setup_uptrace_telemetry
 
 
 MAIN_DIR = config.MAIN_DIR
@@ -37,6 +38,7 @@ app = FastAPI(
     },
     docs_url="/"
 )
+setup_uptrace_telemetry(app)
 
 
 @app.on_event("startup")
