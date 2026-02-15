@@ -1,2 +1,5 @@
 # Параметры gunicorn
-workers = 1  # Количество рабочих процессов Gunicorn
+workers = 2
+timeout = 600
+graceful_timeout = 90
+keepalive = 75
