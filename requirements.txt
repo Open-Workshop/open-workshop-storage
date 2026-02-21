@@ -4,6 +4,7 @@ aiohttp
 gunicorn[standard]
 anyio
 PyJWT
+Pillow
 opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
 opentelemetry-exporter-otlp-proto-grpc

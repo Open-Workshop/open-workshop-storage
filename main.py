@@ -327,16 +327,54 @@ async def transfer_upload(request: Request):
     if not tools.is_safe_job_id(job_id):
         return PlainTextResponse(status_code=400, content="Invalid job id")
 
-    pack_format = payload.get("pack_format", "zip")
-    if pack_format != "zip":
-        return PlainTextResponse(status_code=400, content="Unsupported format")
+    transfer_kind = str(payload.get("transfer_kind") or "archive").strip().lower()
+    if transfer_kind not in {"archive", "img"}:
+        return PlainTextResponse(status_code=400, content="Unsupported transfer kind")
 
-    try:
-        pack_level = int(payload.get("pack_level", 3))
-    except (TypeError, ValueError):
-        pack_level = 3
-    pack_level = max(0, min(pack_level, 9))
-    mod_id = payload.get("mod_id")
+    callback_context = payload.get("callback_context")
+    if not isinstance(callback_context, dict):
+        callback_context = {}
+    callback_payload: dict[str, Any] = {
+        "transfer_kind": transfer_kind,
+        "callback_action": payload.get("callback_action"),
+        "callback_context": callback_context,
+        "target_path": payload.get("target_path"),
+    }
+
+    mod_id = None
+    pack_format = "zip"
+    pack_level = 3
+    storage_type = ""
+    file_kind = ""
+
+    if transfer_kind == "archive":
+        pack_format = payload.get("pack_format", "zip")
+        if pack_format != "zip":
+            return PlainTextResponse(status_code=400, content="Unsupported format")
+
+        try:
+            pack_level = int(payload.get("pack_level", 3))
+        except (TypeError, ValueError):
+            pack_level = 3
+        pack_level = max(0, min(pack_level, 9))
+        mod_id = payload.get("mod_id")
+        update_only = bool(payload.get("update_only") or payload.get("keep_condition"))
+        callback_payload.update(
+            {
+                "mod_id": mod_id,
+                "pack_format": pack_format,
+                "pack_level": pack_level,
+                "update_only": update_only,
+            }
+        )
+    else:
+        storage_type = str(payload.get("storage_type") or "").strip().lower()
+        if not tools.is_allowed_upload_type(storage_type):
+            return PlainTextResponse(status_code=400, content="Invalid storage type")
+        file_kind = tools.normalize_file_kind(payload.get("file_kind"), default="")
+        if file_kind != "img":
+            return PlainTextResponse(status_code=400, content="Invalid file kind")
+        callback_payload.update({"storage_type": storage_type, "file_kind": file_kind})
 
     max_bytes_raw = payload.get("max_bytes", None)
     max_bytes = max_bytes_raw if max_bytes_raw is not None else getattr(config, "TRANSFER_MAX_BYTES", None)
@@ -348,7 +386,10 @@ async def transfer_upload(request: Request):
         max_bytes = None
 
     filename = request.query_params.get("filename") or request.headers.get("X-File-Name")
-    safe_name = tools.sanitize_filename(filename, default="upload.bin")
+    safe_name = tools.sanitize_filename(
+        filename,
+        default="upload.zip" if transfer_kind == "archive" else "upload.img",
+    )
     upload_rel = os.path.join("temp", job_id, safe_name)
     upload_abs = tools.safe_path(MAIN_DIR, upload_rel)
 
@@ -360,9 +401,11 @@ async def transfer_upload(request: Request):
         except (TypeError, ValueError):
             total = None
     logger.info(
-        "transfer upload start job_id=%s mod_id=%s filename=%s size_hint=%s client=%s",
+        "transfer upload start job_id=%s kind=%s mod_id=%s storage_type=%s filename=%s size_hint=%s client=%s",
         job_id,
+        transfer_kind,
         mod_id,
+        storage_type,
         safe_name,
         total,
         client,
@@ -384,6 +427,9 @@ async def transfer_upload(request: Request):
     meta = {
         "job_id": job_id,
         "mod_id": mod_id,
+        "transfer_kind": transfer_kind,
+        "storage_type": storage_type,
+        "file_kind": file_kind,
         "filename": safe_name,
         "download_path": upload_rel,
         "pack_format": pack_format,
@@ -400,13 +446,6 @@ async def transfer_upload(request: Request):
     start_ts = time.monotonic()
     last_log_bytes = 0
     next_percent = 10
-    update_only = bool(payload.get("update_only") or payload.get("keep_condition"))
-    callback_payload = {
-        "mod_id": mod_id,
-        "pack_format": pack_format,
-        "pack_level": pack_level,
-        "update_only": update_only,
-    }
 
     try:
         os.makedirs(os.path.dirname(upload_abs), exist_ok=True)
@@ -488,53 +527,123 @@ async def transfer_upload(request: Request):
             duration,
         )
 
-        archive_type, is_encrypted, archive_entries = await anyio.to_thread.run_sync(
-            tools.probe_archive, upload_abs
-        )
-        if is_encrypted:
-            await _set_state(job_id, status="error", error="encrypted_zip")
-            await _broadcast(job_id, {"event": "error", "message": "zip encrypted"})
+        if transfer_kind == "archive":
+            archive_type, is_encrypted, archive_entries = await anyio.to_thread.run_sync(
+                tools.probe_archive, upload_abs
+            )
+            if is_encrypted:
+                await _set_state(job_id, status="error", error="encrypted_zip")
+                await _broadcast(job_id, {"event": "error", "message": "zip encrypted"})
+                try:
+                    meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+                    meta.update({"status": "error", "error_reason": "encrypted_zip"})
+                    await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+                except Exception:
+                    logger.warning("failed to update meta for job_id=%s", job_id)
+                try:
+                    if os.path.exists(upload_abs):
+                        os.remove(upload_abs)
+                except Exception:
+                    logger.warning("failed to cleanup encrypted zip job_id=%s", job_id)
+                await _notify_manager(
+                    {
+                        **callback_payload,
+                        "job_id": job_id,
+                        "status": "error",
+                        "reason": "encrypted_zip",
+                    }
+                )
+                return PlainTextResponse(status_code=400, content="Encrypted zip not allowed")
+
+            await _set_stage(job_id, "uploaded")
+
+            repack_ok, _, _, repack_reason = await _run_repack_job(
+                job_id=job_id,
+                download_abs=upload_abs,
+                pack_format=pack_format,
+                pack_level=pack_level,
+            )
+            if not repack_ok:
+                await _notify_manager(
+                    {
+                        **callback_payload,
+                        "job_id": job_id,
+                        "status": "error",
+                        "reason": repack_reason or "repack_failed",
+                    }
+                )
+                if repack_reason == "encrypted_zip":
+                    return PlainTextResponse(status_code=400, content="Encrypted zip not allowed")
+                return PlainTextResponse(status_code=500, content="Repack failed")
+        else:
+            await _set_stage(job_id, "processing")
+            packed_rel = os.path.join("temp", job_id, "packed.webp")
+            packed_abs = tools.safe_path(MAIN_DIR, packed_rel)
             try:
-                meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
-                meta.update({"status": "error", "error_reason": "encrypted_zip"})
-                await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+                await anyio.to_thread.run_sync(tools.image_file_to_webp, upload_abs, packed_abs)
+            except ValueError:
+                await _set_state(job_id, status="error", error="not_image")
+                await _broadcast(job_id, {"event": "error", "message": "image expected"})
+                try:
+                    meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+                    meta.update({"status": "error", "error_reason": "not_image"})
+                    await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+                except Exception:
+                    logger.warning("failed to update meta for job_id=%s", job_id)
+                try:
+                    if os.path.exists(upload_abs):
+                        os.remove(upload_abs)
+                except Exception:
+                    logger.warning("failed to cleanup invalid image job_id=%s", job_id)
+                await _notify_manager(
+                    {
+                        **callback_payload,
+                        "job_id": job_id,
+                        "status": "error",
+                        "reason": "not_image",
+                    }
+                )
+                return PlainTextResponse(status_code=400, content="Image expected")
             except Exception:
-                logger.warning("failed to update meta for job_id=%s", job_id)
+                logger.exception("transfer image preparation failed job_id=%s", job_id)
+                try:
+                    if os.path.exists(upload_abs):
+                        os.remove(upload_abs)
+                    if os.path.exists(packed_abs):
+                        os.remove(packed_abs)
+                except Exception:
+                    logger.warning("failed to cleanup image prep files job_id=%s", job_id)
+                await _notify_manager(
+                    {
+                        **callback_payload,
+                        "job_id": job_id,
+                        "status": "error",
+                        "reason": "image_prepare_failed",
+                    }
+                )
+                return PlainTextResponse(status_code=500, content="Image preparation failed")
+
             try:
                 if os.path.exists(upload_abs):
                     os.remove(upload_abs)
             except Exception:
-                logger.warning("failed to cleanup encrypted zip job_id=%s", job_id)
-            await _notify_manager(
-                {
-                    **callback_payload,
-                    "job_id": job_id,
-                    "status": "error",
-                    "reason": "encrypted_zip",
-                }
-            )
-            return PlainTextResponse(status_code=400, content="Encrypted zip not allowed")
+                logger.warning("failed to cleanup source upload file job_id=%s", job_id)
 
-        await _set_stage(job_id, "uploaded")
-
-        repack_ok, _, _, repack_reason = await _run_repack_job(
-            job_id=job_id,
-            download_abs=upload_abs,
-            pack_format=pack_format,
-            pack_level=pack_level,
-        )
-        if not repack_ok:
-            await _notify_manager(
-                {
-                    **callback_payload,
-                    "job_id": job_id,
-                    "status": "error",
-                    "reason": repack_reason or "repack_failed",
-                }
-            )
-            if repack_reason == "encrypted_zip":
-                return PlainTextResponse(status_code=400, content="Encrypted zip not allowed")
-            return PlainTextResponse(status_code=500, content="Repack failed")
+            packed_bytes = os.path.getsize(packed_abs)
+            try:
+                meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
+                meta.update(
+                    {
+                        "packed_path": packed_rel,
+                        "packed_bytes": packed_bytes,
+                        "status": "packed",
+                        "packed_format": "webp",
+                    }
+                )
+                await anyio.to_thread.run_sync(_write_meta_sync, job_id, meta)
+            except Exception:
+                logger.warning("failed to update image meta for job_id=%s", job_id)
+            await _set_stage(job_id, "packed")
 
         await _broadcast(
             job_id,
@@ -552,6 +661,7 @@ async def transfer_upload(request: Request):
                 "status": "success",
                 "bytes": downloaded,
                 "total": total,
+                "packed_format": "zip" if transfer_kind == "archive" else "webp",
             }
         )
         return {
@@ -1367,7 +1477,8 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
     summary="Upload file to Storage (internal)",
     description=(
         "Internal upload endpoint for Manager. "
-        "Accepts multipart form-data with file, type and path. Requires upload token."
+        "Accepts multipart form-data with file, type, path and file_kind. "
+        "Requires upload token."
     ),
     status_code=201,
     response_class=PlainTextResponse,
@@ -1390,7 +1501,14 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
         },
     }
 )
-async def upload(request: Request, file: UploadFile, type: str = Form(), path: str = Form(), token: str = Form()):
+async def upload(
+    request: Request,
+    file: UploadFile,
+    type: str = Form(),
+    path: str = Form(),
+    file_kind: str = Form("bin"),
+    token: str = Form(),
+):
     """
     Загружает файл в Storage (микросервис хранения, функция управляется другим микросервисов).
 
@@ -1399,7 +1517,14 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
     path: Путь и имя файла. В формате "директории/поддиректории/имя.файла". Если под папок нет существует, то они создаются.
     """
     client = request.client.host if request.client else "unknown"
-    logger.info("upload request type=%s path=%s filename=%s client=%s", type, path, file.filename, client)
+    logger.info(
+        "upload request type=%s path=%s file_kind=%s filename=%s client=%s",
+        type,
+        path,
+        file_kind,
+        file.filename,
+        client,
+    )
     if not token:
         logger.warning("upload denied (token missing) type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=401, content="Token not found")
@@ -1409,6 +1534,18 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
     if not tools.is_allowed_upload_type(type):
         logger.warning("upload invalid type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=400, content="Invalid type")
+    normalized_file_kind = tools.normalize_file_kind(file_kind, default="")
+    if not normalized_file_kind:
+        logger.warning(
+            "upload invalid file_kind=%s type=%s path=%s client=%s",
+            file_kind,
+            type,
+            path,
+            client,
+        )
+        return PlainTextResponse(status_code=400, content="Invalid file kind")
+    if type == "avatar" and normalized_file_kind != "img":
+        return PlainTextResponse(status_code=400, content="Avatar requires image file kind")
 
     base_dir = os.path.join(MAIN_DIR, type)
     try:
@@ -1420,9 +1557,32 @@ async def upload(request: Request, file: UploadFile, type: str = Form(), path: s
     if not os.path.exists(os.path.dirname(real_path)):
         os.makedirs(os.path.dirname(real_path))
 
-    # Сохраняем файл
-    await anyio.to_thread.run_sync(tools.copy_fileobj_to_path, file.file, real_path)
-    logger.info("upload saved type=%s path=%s client=%s", type, path, client)
+    if normalized_file_kind == "img":
+        if not path.lower().endswith(".webp"):
+            return PlainTextResponse(
+                status_code=400, content="Image storage path must end with .webp"
+            )
+        raw_bytes = await file.read()
+        try:
+            webp_bytes = await anyio.to_thread.run_sync(tools.image_bytes_to_webp, raw_bytes)
+        except ValueError:
+            return PlainTextResponse(status_code=400, content="Image expected")
+
+        def _write_bytes_sync() -> None:
+            with open(real_path, "wb") as out_file:
+                out_file.write(webp_bytes)
+
+        await anyio.to_thread.run_sync(_write_bytes_sync)
+    else:
+        # Сохраняем файл без изменений
+        await anyio.to_thread.run_sync(tools.copy_fileobj_to_path, file.file, real_path)
+    logger.info(
+        "upload saved type=%s path=%s file_kind=%s client=%s",
+        type,
+        path,
+        normalized_file_kind,
+        client,
+    )
     return path
 
 @app.delete(

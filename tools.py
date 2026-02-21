@@ -2,15 +2,18 @@ import os
 import re
 import shutil
 import subprocess
+from io import BytesIO
 from typing import Optional, Any
 from datetime import datetime, timedelta, timezone
 import ow_config as config
 import bcrypt
 import jwt
+from PIL import Image, UnidentifiedImageError
 
 ALLOWED_FILENAME_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 ALLOWED_TYPES = {"archive", "resource", "avatar"}
 ALLOWED_UPLOAD_TYPES = {"resource", "avatar"}
+ALLOWED_FILE_KINDS = {"img", "bin"}
 ALLOWED_FILENAME_CHARS_WITH_DOT = ALLOWED_FILENAME_CHARS | {"."}
 TRANSFER_JWT_ALG = "HS256"
 SEVEN_ZIP_BIN = "7z"
@@ -191,6 +194,37 @@ def safe_extract_archive(
         if tar_path:
             safe_extract_archive(tar_path, dest_dir)
             os.remove(tar_path)
+
+
+def normalize_file_kind(file_kind: Any, default: str = "bin") -> str:
+    value = str(file_kind or default).strip().lower()
+    return value if value in ALLOWED_FILE_KINDS else ""
+
+
+def image_bytes_to_webp(data: bytes, quality: int = 80) -> bytes:
+    try:
+        with Image.open(BytesIO(data)) as img:
+            img.load()
+            if img.mode in ("RGBA", "LA") or (
+                img.mode == "P" and "transparency" in img.info
+            ):
+                img = img.convert("RGBA")
+            else:
+                img = img.convert("RGB")
+
+            out = BytesIO()
+            img.save(out, format="WEBP", quality=quality, method=6)
+            return out.getvalue()
+    except (UnidentifiedImageError, OSError) as exc:
+        raise ValueError("not an image") from exc
+
+
+def image_file_to_webp(src_path: str, dst_path: str, quality: int = 80) -> None:
+    with open(src_path, "rb") as src_file:
+        data = src_file.read()
+    converted = image_bytes_to_webp(data, quality=quality)
+    with open(dst_path, "wb") as dst_file:
+        dst_file.write(converted)
 
 
 
