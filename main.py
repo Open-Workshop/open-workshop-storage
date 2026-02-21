@@ -1430,8 +1430,9 @@ async def _run_download_job(
         await _close_clients(job_id)
 
 
-@app.get(
+@app.api_route(
     "/download/{type}/{path:path}",
+    methods=["GET", "HEAD"],
     tags=["Files"],
     summary="Download stored file",
     description=(
