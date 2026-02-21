@@ -1450,7 +1450,7 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
                 headers = {
                     "x-token": f"{config.check_access}",
                 }
-                async with session.get(f"{MANAGER_URL}/list/mods/access/[{mod_id}]?user={user}", headers=headers) as resp:
+                async with session.get(f"{MANAGER_URL}/mods/access/[{mod_id}]?user={user}", headers=headers) as resp:
                     if resp.status == 200:
                         # Возвращает такой же список, проверяем, есть ли в нем интересующий нас ID
                         data = await resp.json()
