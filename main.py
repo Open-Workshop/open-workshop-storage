@@ -206,7 +206,7 @@ async def transfer_start(request: Request):
             "bytes": 0,
             "total": None,
             "error": None,
-            "clients": set(),
+            "clients": [],
         }
 
     meta = {
@@ -425,13 +425,22 @@ async def transfer_upload(request: Request):
         if not state:
             JOB_STATE[job_id] = {
                 "status": "uploading",
+                "stage": "uploading",
                 "bytes": 0,
                 "total": total,
                 "error": None,
-                "clients": set(),
+                "clients": [],
             }
         else:
-            state.update({"status": "uploading", "bytes": 0, "total": total, "error": None})
+            state.update(
+                {
+                    "status": "uploading",
+                    "stage": "uploading",
+                    "bytes": 0,
+                    "total": total,
+                    "error": None,
+                }
+            )
 
     meta = {
         "job_id": job_id,
@@ -513,24 +522,25 @@ async def transfer_upload(request: Request):
                         downloaded,
                     )
 
-        await _set_state(job_id, bytes=downloaded, total=total)
+        final_total = total if total is not None else downloaded
+        await _set_state(job_id, bytes=downloaded, total=final_total)
         await _broadcast(
             job_id,
             {
                 "event": "progress",
                 "bytes": downloaded,
-                "total": total,
+                "total": final_total,
                 "stage": "uploading",
             },
         )
-        await _set_state(job_id, status="done", bytes=downloaded, total=total)
+        await _set_state(job_id, status="done", bytes=downloaded, total=final_total)
         try:
             meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
             meta.update(
                 {
                     "status": "uploaded",
                     "downloaded_bytes": downloaded,
-                    "total_bytes": total,
+                    "total_bytes": final_total,
                     "upload_completed_at": int(time.time()),
                 }
             )
@@ -669,7 +679,7 @@ async def transfer_upload(request: Request):
             {
                 "event": "complete",
                 "bytes": downloaded,
-                "total": total,
+                "total": final_total,
                 "stage": "packed",
             },
         )
@@ -679,14 +689,14 @@ async def transfer_upload(request: Request):
                 "job_id": job_id,
                 "status": "success",
                 "bytes": downloaded,
-                "total": total,
+                "total": final_total,
                 "packed_format": "zip" if transfer_kind == "archive" else "webp",
             }
         )
         return {
             "job_id": job_id,
             "bytes": downloaded,
-            "total": total,
+            "total": final_total,
         }
     except Exception as exc:
         logger.exception("transfer upload failed job_id=%s", job_id)
@@ -730,6 +740,7 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
 
     await websocket.accept()
     logger.info("transfer ws connect job_id=%s", job_id)
+    snapshot = None
     async with JOB_LOCK:
         state = JOB_STATE.get(job_id)
         if not state:
@@ -739,28 +750,42 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
                 "bytes": 0,
                 "total": None,
                 "error": None,
-                "clients": set(),
+                "clients": [],
             }
             JOB_STATE[job_id] = state
-        state.setdefault("clients", set()).add(websocket)
-        await websocket.send_json(
-            {
-                "event": "progress",
-                "bytes": state.get("bytes", 0),
-                "total": state.get("total"),
-                "status": state.get("status"),
-                "stage": state.get("stage"),
-            }
-        )
+        clients = state.get("clients")
+        if not isinstance(clients, list):
+            clients = list(clients) if clients else []
+            state["clients"] = clients
+        if websocket not in clients:
+            clients.append(websocket)
+        snapshot = {
+            "event": "progress",
+            "bytes": state.get("bytes", 0),
+            "total": state.get("total"),
+            "status": state.get("status"),
+            "stage": state.get("stage"),
+        }
+    if snapshot is not None:
+        try:
+            await websocket.send_json(snapshot)
+        except Exception:
+            logger.exception("transfer ws initial send failed job_id=%s", job_id)
+            await websocket.close()
+            return
     try:
         while True:
-            await websocket.receive_text()
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
     except WebSocketDisconnect:
         pass
+    except Exception:
+        logger.exception("transfer ws failed job_id=%s", job_id)
     finally:
         async with JOB_LOCK:
             state = JOB_STATE.get(job_id)
-            if state and websocket in state.get("clients", set()):
+            if state and websocket in state.get("clients", []):
                 state["clients"].remove(websocket)
         logger.info("transfer ws disconnect job_id=%s", job_id)
 
@@ -999,7 +1024,7 @@ async def _close_clients(job_id: str) -> None:
         if not state:
             return
         clients = list(state.get("clients", []))
-        state["clients"] = set()
+        state["clients"] = []
     for ws in clients:
         try:
             await ws.close()
@@ -1017,7 +1042,7 @@ async def _set_state(job_id: str, **updates: Any) -> None:
                 "bytes": 0,
                 "total": None,
                 "error": None,
-                "clients": set(),
+                "clients": [],
             },
         )
         state.update(updates)
