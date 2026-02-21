@@ -98,6 +98,31 @@ def probe_archive(path: str) -> tuple[Optional[str], bool, Optional[list[dict[st
             break
     return archive_type, encrypted, entries
 
+
+def archive_entries_unpacked_bytes(entries: Optional[list[dict[str, str]]]) -> Optional[int]:
+    if entries is None:
+        return None
+
+    total = 0
+    for entry in entries:
+        if entry.get("Type"):
+            continue
+        if not entry.get("Path"):
+            continue
+        if entry.get("Folder") == "+":
+            continue
+        raw_size = entry.get("Size")
+        if raw_size is None:
+            return None
+        try:
+            size = int(raw_size)
+        except (TypeError, ValueError):
+            return None
+        if size < 0:
+            return None
+        total += size
+    return total
+
 def zip_dir_with_level(src_dir: str, dest_zip_path: str, compresslevel: int = 3) -> None:
     src_dir = os.path.abspath(src_dir)
     os.makedirs(os.path.dirname(dest_zip_path), exist_ok=True)

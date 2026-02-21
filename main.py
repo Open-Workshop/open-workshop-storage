@@ -556,6 +556,7 @@ async def transfer_upload(request: Request):
             duration,
         )
 
+        unpacked_bytes = None
         if transfer_kind == "archive":
             archive_type, is_encrypted, archive_entries = await anyio.to_thread.run_sync(
                 tools.probe_archive, upload_abs
@@ -586,7 +587,7 @@ async def transfer_upload(request: Request):
 
             await _set_stage(job_id, "uploaded")
 
-            repack_ok, _, _, repack_reason = await _run_repack_job(
+            repack_ok, _, _, unpacked_bytes, repack_reason = await _run_repack_job(
                 job_id=job_id,
                 download_abs=upload_abs,
                 pack_format=pack_format,
@@ -683,16 +684,17 @@ async def transfer_upload(request: Request):
                 "stage": "packed",
             },
         )
-        await _notify_manager(
-            {
-                **callback_payload,
-                "job_id": job_id,
-                "status": "success",
-                "bytes": downloaded,
-                "total": final_total,
-                "packed_format": "zip" if transfer_kind == "archive" else "webp",
-            }
-        )
+        callback_success_payload = {
+            **callback_payload,
+            "job_id": job_id,
+            "status": "success",
+            "bytes": downloaded,
+            "total": final_total,
+            "packed_format": "zip" if transfer_kind == "archive" else "webp",
+        }
+        if transfer_kind == "archive" and unpacked_bytes is not None:
+            callback_success_payload["unpacked_bytes"] = unpacked_bytes
+        await _notify_manager(callback_success_payload)
         return {
             "job_id": job_id,
             "bytes": downloaded,
@@ -861,7 +863,7 @@ async def transfer_repack(
         compression_level,
         client,
     )
-    repack_ok, packed_rel, packed_bytes, repack_reason = await _run_repack_job(
+    repack_ok, packed_rel, packed_bytes, unpacked_bytes, repack_reason = await _run_repack_job(
         job_id=job_id,
         download_abs=download_abs,
         pack_format=format,
@@ -876,6 +878,7 @@ async def transfer_repack(
         "job_id": job_id,
         "packed_bytes": packed_bytes,
         "packed_path": packed_rel,
+        "unpacked_bytes": unpacked_bytes,
     }
 
 
@@ -1058,11 +1061,11 @@ async def _run_repack_job(
     download_abs: str,
     pack_format: str,
     pack_level: int,
-) -> tuple[bool, Optional[str], Optional[int], Optional[str]]:
+) -> tuple[bool, Optional[str], Optional[int], Optional[int], Optional[str]]:
     if pack_format != "zip":
         await _set_state(job_id, status="error", error="unsupported_format")
         await _broadcast(job_id, {"event": "error", "message": "unsupported format"})
-        return False, None, None, "unsupported_format"
+        return False, None, None, None, "unsupported_format"
 
     packed_rel = os.path.join("temp", job_id, "packed.zip")
     packed_abs = tools.safe_path(MAIN_DIR, packed_rel)
@@ -1070,6 +1073,9 @@ async def _run_repack_job(
     await _set_stage(job_id, "repacking")
     archive_type, is_encrypted, archive_entries = await anyio.to_thread.run_sync(
         tools.probe_archive, download_abs
+    )
+    unpacked_bytes = await anyio.to_thread.run_sync(
+        tools.archive_entries_unpacked_bytes, archive_entries
     )
     if is_encrypted:
         await _set_state(job_id, status="error", error="encrypted_zip")
@@ -1081,7 +1087,7 @@ async def _run_repack_job(
         except Exception:
             logger.warning("failed to update meta for job_id=%s", job_id)
         logger.warning("transfer repack denied (encrypted zip) job_id=%s", job_id)
-        return False, None, None, "encrypted_zip"
+        return False, None, None, unpacked_bytes, "encrypted_zip"
     if archive_type == "zip":
         zip_ok = await anyio.to_thread.run_sync(
             tools.zip_uses_deflated_or_better,
@@ -1110,7 +1116,7 @@ async def _run_repack_job(
                     job_id,
                     packed_bytes,
                 )
-                return True, packed_rel, packed_bytes, None
+                return True, packed_rel, packed_bytes, unpacked_bytes, None
             except Exception:
                 logger.warning("failed to update meta for job_id=%s", job_id)
 
@@ -1131,7 +1137,7 @@ async def _run_repack_job(
         except Exception:
             logger.warning("failed to update meta for job_id=%s", job_id)
         await _set_stage(job_id, "packed")
-        return True, packed_rel, packed_bytes, None
+        return True, packed_rel, packed_bytes, unpacked_bytes, None
 
     try:
         repack_rel = os.path.join("temp", job_id, "repack")
@@ -1188,12 +1194,12 @@ async def _run_repack_job(
             packed_bytes,
             duration,
         )
-        return True, packed_rel, packed_bytes, None
+        return True, packed_rel, packed_bytes, unpacked_bytes, None
     except Exception as exc:
         logger.exception("transfer repack failed job_id=%s", job_id)
         await _set_state(job_id, status="error", error=str(exc))
         await _broadcast(job_id, {"event": "error", "message": "repack failed"})
-        return False, None, None, "repack_failed"
+        return False, None, None, unpacked_bytes, "repack_failed"
 
 
 async def _notify_manager(payload: dict[str, Any]) -> None:
@@ -1354,7 +1360,7 @@ async def _run_download_job(
             logger.warning("failed to update meta for job_id=%s", job_id)
         await _set_stage(job_id, "downloaded")
 
-        repack_ok, _, _, repack_reason = await _run_repack_job(
+        repack_ok, _, _, unpacked_bytes, repack_reason = await _run_repack_job(
             job_id=job_id,
             download_abs=download_abs,
             pack_format=callback_payload.get("pack_format", "zip"),
@@ -1386,15 +1392,16 @@ async def _run_download_job(
                 "stage": "packed",
             },
         )
-        await _notify_manager(
-            {
-                **callback_payload,
-                "job_id": job_id,
-                "status": "success",
-                "bytes": downloaded,
-                "total": total,
-            }
-        )
+        callback_success_payload = {
+            **callback_payload,
+            "job_id": job_id,
+            "status": "success",
+            "bytes": downloaded,
+            "total": total,
+        }
+        if unpacked_bytes is not None:
+            callback_success_payload["unpacked_bytes"] = unpacked_bytes
+        await _notify_manager(callback_success_payload)
     except Exception as exc:
         logger.exception("transfer download failed job_id=%s", job_id)
         try:
@@ -1475,9 +1482,36 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
     except ValueError:
         logger.warning("download path traversal type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=423, content="Access denied")
-    
+
     if os.path.isfile(real_path):
         download_name = tools.build_download_filename(filename, real_path)
+
+        async def file_response_with_meta() -> FileResponse:
+            response = FileResponse(real_path, filename=download_name)
+            if (
+                request.method == "HEAD"
+                and type == "archive"
+                and path.startswith("mods/")
+            ):
+                try:
+                    _, is_encrypted, archive_entries = await anyio.to_thread.run_sync(
+                        tools.probe_archive, real_path
+                    )
+                    if not is_encrypted:
+                        unpacked_bytes = await anyio.to_thread.run_sync(
+                            tools.archive_entries_unpacked_bytes, archive_entries
+                        )
+                        if unpacked_bytes is not None:
+                            response.headers["X-Unpacked-Bytes"] = str(unpacked_bytes)
+                except Exception:
+                    logger.warning(
+                        "download unpacked header failed type=%s path=%s client=%s",
+                        type,
+                        path,
+                        client,
+                    )
+            return response
+
         if type == 'archive' and path.startswith('mod/'):
             parts = path.split('/', 2)
             if len(parts) < 2:
@@ -1501,7 +1535,7 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
                         if mod_id in data:
                             logger.info("download allowed mod_id=%s type=%s path=%s client=%s", mod_id, type, path, client)
                             # Если есть, то возвращаем сам файл
-                            return FileResponse(real_path, filename=download_name)
+                            return await file_response_with_meta()
                         else:
                             logger.warning("download denied mod_id=%s type=%s path=%s client=%s", mod_id, type, path, client)
                             return PlainTextResponse(status_code=403, content="Access denied")
@@ -1510,7 +1544,7 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
                         return PlainTextResponse(status_code=503, content="Manager unavailable")
         else:
             logger.info("download ok type=%s path=%s client=%s", type, path, client)
-            return FileResponse(real_path, filename=download_name)
+            return await file_response_with_meta()
     else:
         logger.info("download not found type=%s path=%s client=%s", type, path, client)
         return PlainTextResponse(status_code=404, content="File not found")
