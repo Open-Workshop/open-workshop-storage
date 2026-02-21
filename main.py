@@ -393,13 +393,22 @@ async def transfer_upload(request: Request):
     upload_rel = os.path.join("temp", job_id, safe_name)
     upload_abs = tools.safe_path(MAIN_DIR, upload_rel)
 
-    total = None
-    content_len = request.headers.get("content-length")
-    if content_len:
+    def _parse_non_negative_int(value: Any) -> Optional[int]:
         try:
-            total = int(content_len)
+            parsed = int(value)
         except (TypeError, ValueError):
-            total = None
+            return None
+        if parsed < 0:
+            return None
+        return parsed
+
+    total = _parse_non_negative_int(request.headers.get("content-length"))
+    if total is None:
+        total = _parse_non_negative_int(request.query_params.get("size"))
+    if total is None:
+        total = _parse_non_negative_int(
+            request.headers.get("X-File-Size") or request.headers.get("X-Upload-Size")
+        )
     logger.info(
         "transfer upload start job_id=%s kind=%s mod_id=%s storage_type=%s filename=%s size_hint=%s client=%s",
         job_id,
@@ -504,6 +513,16 @@ async def transfer_upload(request: Request):
                         downloaded,
                     )
 
+        await _set_state(job_id, bytes=downloaded, total=total)
+        await _broadcast(
+            job_id,
+            {
+                "event": "progress",
+                "bytes": downloaded,
+                "total": total,
+                "stage": "uploading",
+            },
+        )
         await _set_state(job_id, status="done", bytes=downloaded, total=total)
         try:
             meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
