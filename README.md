@@ -57,6 +57,7 @@ Example progress event during archive repacking:
 
 Notes:
 
+- Every WebSocket event includes the current state snapshot (`bytes`, `total`, `status`, `stage`), so clients can safely replace local state even if they connected while a job was still `pending`.
 - `percent` is only meaningful for `stage = "repacking"`. For other stages it is `null` in the initial snapshot and may be omitted in subsequent events.
 - There is no heartbeat timer. Progress messages are emitted on actual state changes or data/progress updates.
 

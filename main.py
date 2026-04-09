@@ -485,7 +485,10 @@ async def transfer_upload(request: Request):
                 downloaded += len(chunk)
                 if max_bytes and downloaded > max_bytes:
                     await _set_state(job_id, status="error", error="size_limit")
-                    await _broadcast(job_id, {"event": "error", "message": "file too large"})
+                    await _broadcast(
+                        job_id,
+                        await _build_state_event(job_id, "error", message="file too large"),
+                    )
                     try:
                         if os.path.exists(upload_abs):
                             os.remove(upload_abs)
@@ -506,15 +509,7 @@ async def transfer_upload(request: Request):
                 if now - last_push >= PROGRESS_PUSH_INTERVAL:
                     last_push = now
                     await _set_state(job_id, bytes=downloaded)
-                    await _broadcast(
-                        job_id,
-                        {
-                            "event": "progress",
-                            "bytes": downloaded,
-                            "total": total,
-                            "stage": "uploading",
-                        },
-                    )
+                    await _broadcast(job_id, await _build_state_event(job_id, "progress"))
                 if total:
                     percent = int((downloaded / total) * 100)
                     if percent >= next_percent:
@@ -535,15 +530,7 @@ async def transfer_upload(request: Request):
 
         final_total = total if total is not None else downloaded
         await _set_state(job_id, bytes=downloaded, total=final_total)
-        await _broadcast(
-            job_id,
-            {
-                "event": "progress",
-                "bytes": downloaded,
-                "total": final_total,
-                "stage": "uploading",
-            },
-        )
+        await _broadcast(job_id, await _build_state_event(job_id, "progress"))
         await _set_state(job_id, status="done", bytes=downloaded, total=final_total)
         try:
             meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
@@ -574,7 +561,10 @@ async def transfer_upload(request: Request):
             )
             if is_encrypted:
                 await _set_state(job_id, status="error", error="encrypted_zip")
-                await _broadcast(job_id, {"event": "error", "message": "zip encrypted"})
+                await _broadcast(
+                    job_id,
+                    await _build_state_event(job_id, "error", message="zip encrypted"),
+                )
                 try:
                     meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
                     meta.update({"status": "error", "error_reason": "encrypted_zip"})
@@ -624,7 +614,10 @@ async def transfer_upload(request: Request):
                 await anyio.to_thread.run_sync(tools.image_file_to_webp, upload_abs, packed_abs)
             except ValueError:
                 await _set_state(job_id, status="error", error="not_image")
-                await _broadcast(job_id, {"event": "error", "message": "image expected"})
+                await _broadcast(
+                    job_id,
+                    await _build_state_event(job_id, "error", message="image expected"),
+                )
                 try:
                     meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
                     meta.update({"status": "error", "error_reason": "not_image"})
@@ -686,15 +679,7 @@ async def transfer_upload(request: Request):
                 logger.warning("failed to update image meta for job_id=%s", job_id)
             await _set_stage(job_id, "packed")
 
-        await _broadcast(
-            job_id,
-            {
-                "event": "complete",
-                "bytes": downloaded,
-                "total": final_total,
-                "stage": "packed",
-            },
-        )
+        await _broadcast(job_id, await _build_state_event(job_id, "complete"))
         callback_success_payload = {
             **callback_payload,
             "job_id": job_id,
@@ -731,7 +716,7 @@ async def transfer_upload(request: Request):
         except Exception:
             logger.warning("failed to update meta for job_id=%s", job_id)
         await _set_state(job_id, status="error", error=str(exc))
-        await _broadcast(job_id, {"event": "error", "message": "upload failed"})
+        await _broadcast(job_id, await _build_state_event(job_id, "error", message="upload failed"))
         await _notify_manager(
             {**callback_payload, "job_id": job_id, "status": "error", "reason": "exception"}
         )
@@ -765,14 +750,7 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
             state["clients"] = clients
         if websocket not in clients:
             clients.append(websocket)
-        snapshot = {
-            "event": "progress",
-            "bytes": state.get("bytes", 0),
-            "total": state.get("total"),
-            "status": state.get("status"),
-            "stage": state.get("stage"),
-            "percent": state.get("percent"),
-        }
+        snapshot = _state_event_payload("progress", state)
     if snapshot is not None:
         try:
             await websocket.send_json(snapshot)
@@ -1012,6 +990,31 @@ def _write_meta_sync(job_id: str, data: dict[str, Any]) -> None:
         json.dump(data, meta_file, ensure_ascii=True)
 
 
+def _state_event_payload(
+    event: str,
+    state: dict[str, Any],
+    **extra: Any,
+) -> dict[str, Any]:
+    payload = {
+        "event": event,
+        "bytes": state.get("bytes", 0),
+        "total": state.get("total"),
+        "status": state.get("status"),
+        "stage": state.get("stage"),
+    }
+    percent = state.get("percent")
+    if percent is not None or event == "progress":
+        payload["percent"] = percent
+    payload.update(extra)
+    return payload
+
+
+async def _build_state_event(job_id: str, event: str, **extra: Any) -> dict[str, Any]:
+    async with JOB_LOCK:
+        state = JOB_STATE.setdefault(job_id, _new_job_state())
+        return _state_event_payload(event, state, **extra)
+
+
 async def _broadcast(job_id: str, message: dict[str, Any]) -> None:
     async with JOB_LOCK:
         state = JOB_STATE.get(job_id)
@@ -1047,25 +1050,21 @@ async def _set_state(job_id: str, **updates: Any) -> None:
 
 
 async def _set_stage(job_id: str, stage: str) -> None:
-    await _set_state(job_id, stage=stage, percent=None)
-    await _broadcast(job_id, {"event": "stage", "stage": stage})
+    async with JOB_LOCK:
+        state = JOB_STATE.setdefault(job_id, _new_job_state())
+        state["stage"] = stage
+        state["percent"] = None
+        payload = _state_event_payload("stage", state)
+    await _broadcast(job_id, payload)
 
 
 async def _broadcast_repack_progress(job_id: str, percent: int) -> None:
     percent = max(0, min(100, int(percent)))
-    snapshot = None
     async with JOB_LOCK:
         state = JOB_STATE.setdefault(job_id, _new_job_state())
         state["stage"] = "repacking"
         state["percent"] = percent
-        snapshot = {
-            "event": "progress",
-            "bytes": state.get("bytes", 0),
-            "total": state.get("total"),
-            "status": state.get("status"),
-            "stage": "repacking",
-            "percent": percent,
-        }
+        snapshot = _state_event_payload("progress", state)
     await _broadcast(job_id, snapshot)
 
 
@@ -1077,7 +1076,10 @@ async def _run_repack_job(
 ) -> tuple[bool, Optional[str], Optional[int], Optional[int], Optional[str]]:
     if pack_format != "zip":
         await _set_state(job_id, status="error", error="unsupported_format")
-        await _broadcast(job_id, {"event": "error", "message": "unsupported format"})
+        await _broadcast(
+            job_id,
+            await _build_state_event(job_id, "error", message="unsupported format"),
+        )
         return False, None, None, None, "unsupported_format"
 
     packed_rel = os.path.join("temp", job_id, "packed.zip")
@@ -1092,7 +1094,10 @@ async def _run_repack_job(
     )
     if is_encrypted:
         await _set_state(job_id, status="error", error="encrypted_zip")
-        await _broadcast(job_id, {"event": "error", "message": "zip encrypted"})
+        await _broadcast(
+            job_id,
+            await _build_state_event(job_id, "error", message="zip encrypted"),
+        )
         try:
             meta = await anyio.to_thread.run_sync(_read_meta_sync, job_id)
             meta.update({"status": "error", "error_reason": "encrypted_zip"})
@@ -1232,7 +1237,7 @@ async def _run_repack_job(
     except Exception as exc:
         logger.exception("transfer repack failed job_id=%s", job_id)
         await _set_state(job_id, status="error", error=str(exc))
-        await _broadcast(job_id, {"event": "error", "message": "repack failed"})
+        await _broadcast(job_id, await _build_state_event(job_id, "error", message="repack failed"))
         return False, None, None, unpacked_bytes, "repack_failed"
 
 
@@ -1299,10 +1304,11 @@ async def _run_download_job(
                     await _set_state(job_id, status="error", error=f"status:{resp.status}")
                     await _broadcast(
                         job_id,
-                        {
-                            "event": "error",
-                            "message": f"download failed with status {resp.status}",
-                        },
+                        await _build_state_event(
+                            job_id,
+                            "error",
+                            message=f"download failed with status {resp.status}",
+                        ),
                     )
                     await _notify_manager(
                         {
@@ -1320,7 +1326,7 @@ async def _run_download_job(
                     await _set_state(job_id, status="error", error="size_limit")
                     await _broadcast(
                         job_id,
-                        {"event": "error", "message": "file too large"},
+                        await _build_state_event(job_id, "error", message="file too large"),
                     )
                     try:
                         if os.path.exists(download_abs):
@@ -1347,7 +1353,7 @@ async def _run_download_job(
                             await _set_state(job_id, status="error", error="size_limit")
                             await _broadcast(
                                 job_id,
-                                {"event": "error", "message": "file too large"},
+                                await _build_state_event(job_id, "error", message="file too large"),
                             )
                             try:
                                 if os.path.exists(download_abs):
@@ -1368,15 +1374,7 @@ async def _run_download_job(
                         if now - last_push >= PROGRESS_PUSH_INTERVAL:
                             last_push = now
                             await _set_state(job_id, bytes=downloaded)
-                            await _broadcast(
-                                job_id,
-                                {
-                                    "event": "progress",
-                                    "bytes": downloaded,
-                                    "total": total,
-                                    "stage": "downloading",
-                                },
-                            )
+                            await _broadcast(job_id, await _build_state_event(job_id, "progress"))
 
         await _set_state(job_id, status="done", bytes=downloaded, total=total)
         try:
@@ -1417,15 +1415,7 @@ async def _run_download_job(
             )
             return
 
-        await _broadcast(
-            job_id,
-            {
-                "event": "complete",
-                "bytes": downloaded,
-                "total": total,
-                "stage": "packed",
-            },
-        )
+        await _broadcast(job_id, await _build_state_event(job_id, "complete"))
         callback_success_payload = {
             **callback_payload,
             "job_id": job_id,
@@ -1456,7 +1446,7 @@ async def _run_download_job(
         except Exception:
             logger.warning("failed to update meta for job_id=%s", job_id)
         await _set_state(job_id, status="error", error=str(exc))
-        await _broadcast(job_id, {"event": "error", "message": "download failed"})
+        await _broadcast(job_id, await _build_state_event(job_id, "error", message="download failed"))
         await _notify_manager(
             {**callback_payload, "job_id": job_id, "status": "error", "reason": "exception"}
         )
