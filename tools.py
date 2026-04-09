@@ -1,9 +1,12 @@
+import errno
 import os
+import pty
 import re
+import select
 import shutil
 import subprocess
 from io import BytesIO
-from typing import Optional, Any
+from typing import Optional, Any, Callable
 from datetime import datetime, timedelta, timezone
 import ow_config as config
 import bcrypt
@@ -17,6 +20,7 @@ ALLOWED_FILE_KINDS = {"img", "bin"}
 ALLOWED_FILENAME_CHARS_WITH_DOT = ALLOWED_FILENAME_CHARS | {"."}
 TRANSFER_JWT_ALG = "HS256"
 SEVEN_ZIP_BIN = "7z"
+SEVEN_ZIP_PROGRESS_RE = re.compile(r"(?<!\d)(100|[1-9]?\d)%")
 
 
 def safe_path(base_dir: str, path: str) -> str:
@@ -44,6 +48,86 @@ def _run_7z(args: list[str], cwd: Optional[str] = None) -> subprocess.CompletedP
         cwd=cwd,
         capture_output=True,
         text=True,
+    )
+
+
+def _drain_7z_progress_stream(
+    chunk: str,
+    state: dict[str, Any],
+    on_progress: Optional[Callable[[int], None]] = None,
+) -> None:
+    pending = str(state.get("pending", "")) + chunk
+    if len(pending) > 256:
+        pending = pending[-256:]
+    last_percent = int(state.get("last_percent", -1))
+    for match in SEVEN_ZIP_PROGRESS_RE.finditer(pending):
+        percent = int(match.group(1))
+        if percent <= last_percent:
+            continue
+        last_percent = percent
+        if on_progress is not None:
+            on_progress(percent)
+    state["pending"] = pending
+    state["last_percent"] = last_percent
+
+
+def _run_7z_with_progress(
+    args: list[str],
+    cwd: Optional[str] = None,
+    on_progress: Optional[Callable[[int], None]] = None,
+) -> subprocess.CompletedProcess:
+    ensure_7z_available()
+    master_fd, slave_fd = pty.openpty()
+    process = subprocess.Popen(
+        [SEVEN_ZIP_BIN, *args],
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        close_fds=True,
+    )
+    os.close(slave_fd)
+
+    output_chunks: list[str] = []
+    progress_state = {"pending": "", "last_percent": -1}
+    try:
+        while True:
+            ready, _, _ = select.select([master_fd], [], [], 0.1)
+            if master_fd in ready:
+                try:
+                    data = os.read(master_fd, 4096)
+                except OSError as exc:
+                    if exc.errno == errno.EIO:
+                        break
+                    raise
+                if not data:
+                    break
+                chunk = data.decode("utf-8", errors="replace")
+                output_chunks.append(chunk)
+                _drain_7z_progress_stream(chunk, progress_state, on_progress)
+            if process.poll() is not None and master_fd not in ready:
+                try:
+                    data = os.read(master_fd, 4096)
+                except OSError as exc:
+                    if exc.errno == errno.EIO:
+                        break
+                    raise
+                if not data:
+                    break
+                chunk = data.decode("utf-8", errors="replace")
+                output_chunks.append(chunk)
+                _drain_7z_progress_stream(chunk, progress_state, on_progress)
+    finally:
+        os.close(master_fd)
+
+    returncode = process.wait()
+    output = "".join(output_chunks)
+
+    return subprocess.CompletedProcess(
+        process.args,
+        returncode,
+        stdout=output,
+        stderr="",
     )
 
 
@@ -123,25 +207,34 @@ def archive_entries_unpacked_bytes(entries: Optional[list[dict[str, str]]]) -> O
         total += size
     return total
 
-def zip_dir_with_level(src_dir: str, dest_zip_path: str, compresslevel: int = 3) -> None:
+def zip_dir_with_level(
+    src_dir: str,
+    dest_zip_path: str,
+    compresslevel: int = 3,
+    on_progress: Optional[Callable[[int], None]] = None,
+) -> None:
     src_dir = os.path.abspath(src_dir)
     os.makedirs(os.path.dirname(dest_zip_path), exist_ok=True)
     if os.path.exists(dest_zip_path):
         os.remove(dest_zip_path)
-    result = _run_7z(
+    result = _run_7z_with_progress(
         [
             "a",
             "-tzip",
             "-mm=Deflate",
             f"-mx={compresslevel}",
             "-mmt=on",
+            "-bb0",
+            "-bso0",
+            "-bsp1",
             dest_zip_path,
             ".",
         ],
         cwd=src_dir,
+        on_progress=on_progress,
     )
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "7z failed to create zip")
+        raise RuntimeError((result.stderr or result.stdout).strip() or "7z failed to create zip")
 
 
 def zip_uses_deflated_or_better(

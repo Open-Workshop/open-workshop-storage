@@ -15,6 +15,51 @@ sudo apt install -y p7zip-full
 pip install -r requirements.txt
 ```
 
+## Transfer WebSocket
+
+Progress for `/transfer/start` and `/transfer/upload` jobs is available via
+`/transfer/ws/{job_id}?token=...`.
+
+When a client connects, the server immediately sends the current snapshot:
+
+```json
+{
+  "event": "progress",
+  "bytes": 1048576,
+  "total": 7340032,
+  "status": "uploading",
+  "stage": "uploading",
+  "percent": null
+}
+```
+
+Supported WebSocket events:
+
+- `progress`:
+  - During `uploading` and `downloading`, sent at most once every `0.25s` while bytes are still flowing.
+  - During `repacking`, includes optional `percent` from `7z` so the client can render an archive progress bar.
+- `stage`: sent whenever the transfer stage changes, for example `uploading`, `uploaded`, `downloading`, `downloaded`, `repacking`, `packed`.
+- `complete`: sent when the final packed artifact is ready.
+- `error`: sent when the transfer or repack fails.
+
+Example progress event during archive repacking:
+
+```json
+{
+  "event": "progress",
+  "bytes": 7340032,
+  "total": 7340032,
+  "status": "done",
+  "stage": "repacking",
+  "percent": 42
+}
+```
+
+Notes:
+
+- `percent` is only meaningful for `stage = "repacking"`. For other stages it is `null` in the initial snapshot and may be omitted in subsequent events.
+- There is no heartbeat timer. Progress messages are emitted on actual state changes or data/progress updates.
+
 ## Uptrace telemetry
 
 Сервер отправляет трейсы в Uptrace через OpenTelemetry, если задан `UPTRACE_DSN`.

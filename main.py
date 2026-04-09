@@ -25,6 +25,18 @@ JOB_LOCK = asyncio.Lock()
 PROGRESS_PUSH_INTERVAL = 0.25
 
 
+def _new_job_state() -> dict[str, Any]:
+    return {
+        "status": "pending",
+        "stage": "pending",
+        "bytes": 0,
+        "total": None,
+        "percent": None,
+        "error": None,
+        "clients": [],
+    }
+
+
 # Создание приложения
 app = FastAPI(
     title="Open Workshop",
@@ -201,13 +213,7 @@ async def transfer_start(request: Request):
                 "status": state.get("status"),
                 "ws_url": f"/transfer/ws/{job_id}",
             }
-        JOB_STATE[job_id] = {
-            "status": "pending",
-            "bytes": 0,
-            "total": None,
-            "error": None,
-            "clients": [],
-        }
+        JOB_STATE[job_id] = _new_job_state()
 
     meta = {
         "job_id": job_id,
@@ -423,14 +429,18 @@ async def transfer_upload(request: Request):
     async with JOB_LOCK:
         state = JOB_STATE.get(job_id)
         if not state:
-            JOB_STATE[job_id] = {
-                "status": "uploading",
-                "stage": "uploading",
-                "bytes": 0,
-                "total": total,
-                "error": None,
-                "clients": [],
-            }
+            state = _new_job_state()
+            state.update(
+                {
+                    "status": "uploading",
+                    "stage": "uploading",
+                    "bytes": 0,
+                    "total": total,
+                    "percent": None,
+                    "error": None,
+                }
+            )
+            JOB_STATE[job_id] = state
         else:
             state.update(
                 {
@@ -438,6 +448,7 @@ async def transfer_upload(request: Request):
                     "stage": "uploading",
                     "bytes": 0,
                     "total": total,
+                    "percent": None,
                     "error": None,
                 }
             )
@@ -746,14 +757,7 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
     async with JOB_LOCK:
         state = JOB_STATE.get(job_id)
         if not state:
-            state = {
-                "status": "pending",
-                "stage": "pending",
-                "bytes": 0,
-                "total": None,
-                "error": None,
-                "clients": [],
-            }
+            state = _new_job_state()
             JOB_STATE[job_id] = state
         clients = state.get("clients")
         if not isinstance(clients, list):
@@ -767,6 +771,7 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
             "total": state.get("total"),
             "status": state.get("status"),
             "stage": state.get("stage"),
+            "percent": state.get("percent"),
         }
     if snapshot is not None:
         try:
@@ -1037,23 +1042,31 @@ async def _close_clients(job_id: str) -> None:
 
 async def _set_state(job_id: str, **updates: Any) -> None:
     async with JOB_LOCK:
-        state = JOB_STATE.setdefault(
-            job_id,
-            {
-                "status": "pending",
-                "stage": "pending",
-                "bytes": 0,
-                "total": None,
-                "error": None,
-                "clients": [],
-            },
-        )
+        state = JOB_STATE.setdefault(job_id, _new_job_state())
         state.update(updates)
 
 
 async def _set_stage(job_id: str, stage: str) -> None:
-    await _set_state(job_id, stage=stage)
+    await _set_state(job_id, stage=stage, percent=None)
     await _broadcast(job_id, {"event": "stage", "stage": stage})
+
+
+async def _broadcast_repack_progress(job_id: str, percent: int) -> None:
+    percent = max(0, min(100, int(percent)))
+    snapshot = None
+    async with JOB_LOCK:
+        state = JOB_STATE.setdefault(job_id, _new_job_state())
+        state["stage"] = "repacking"
+        state["percent"] = percent
+        snapshot = {
+            "event": "progress",
+            "bytes": state.get("bytes", 0),
+            "total": state.get("total"),
+            "status": state.get("status"),
+            "stage": "repacking",
+            "percent": percent,
+        }
+    await _broadcast(job_id, snapshot)
 
 
 async def _run_repack_job(
@@ -1165,12 +1178,33 @@ async def _run_repack_job(
                 logger.warning("failed to update meta download_path for job_id=%s", job_id)
 
         start_ts = time.monotonic()
+        repack_progress = {"last_push": time.monotonic(), "last_percent": 0}
+
+        def _on_repack_progress(percent: int) -> None:
+            percent = max(0, min(100, int(percent)))
+            last_percent = int(repack_progress["last_percent"])
+            now = time.monotonic()
+            if percent <= last_percent:
+                return
+            if percent < 100 and now - float(repack_progress["last_push"]) < PROGRESS_PUSH_INTERVAL:
+                return
+            repack_progress["last_percent"] = percent
+            repack_progress["last_push"] = now
+            try:
+                anyio.from_thread.run(_broadcast_repack_progress, job_id, percent)
+            except Exception:
+                pass
+
+        await _broadcast_repack_progress(job_id, 0)
         await anyio.to_thread.run_sync(
             tools.zip_dir_with_level,
             repack_abs,
             packed_abs,
             pack_level,
+            _on_repack_progress,
         )
+        if int(repack_progress["last_percent"]) < 100:
+            await _broadcast_repack_progress(job_id, 100)
         duration = time.monotonic() - start_ts
         packed_bytes = os.path.getsize(packed_abs)
         try:
