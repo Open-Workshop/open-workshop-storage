@@ -37,8 +37,8 @@ Supported WebSocket events:
 
 - `progress`:
   - During `uploading` and `downloading`, sent at most once every `0.25s` while bytes are still flowing.
-  - During `repacking`, includes optional `percent` from `7z` so the client can render an archive progress bar.
-- `stage`: sent whenever the transfer stage changes, for example `uploading`, `uploaded`, `downloading`, `downloaded`, `repacking`, `packed`.
+  - During `extracting` and `repacking`, includes optional `percent` from `7z` so the client can render archive progress for each phase.
+- `stage`: sent whenever the transfer stage changes, for example `uploading`, `uploaded`, `downloading`, `downloaded`, `extracting`, `repacking`, `packed`.
 - `complete`: sent when the final packed artifact is ready.
 - `error`: sent when the transfer or repack fails.
 
@@ -58,7 +58,7 @@ Example progress event during archive repacking:
 Notes:
 
 - Every WebSocket event includes the current state snapshot (`bytes`, `total`, `status`, `stage`), so clients can safely replace local state even if they connected while a job was still `pending`.
-- `percent` is only meaningful for `stage = "repacking"`. For other stages it is `null` in the initial snapshot and may be omitted in subsequent events.
+- `percent` is only meaningful for `stage = "extracting"` and `stage = "repacking"`. For other stages it is `null` in the initial snapshot and may be omitted in subsequent events.
 - There is no heartbeat timer. Progress messages are emitted on actual state changes or data/progress updates.
 
 ## Uptrace telemetry

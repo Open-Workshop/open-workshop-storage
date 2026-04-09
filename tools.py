@@ -285,6 +285,7 @@ def safe_extract_archive(
     archive_path: str,
     dest_dir: str,
     entries: Optional[list[dict[str, str]]] = None,
+    on_progress: Optional[Callable[[int], None]] = None,
 ) -> None:
     dest_dir = os.path.abspath(dest_dir)
     entries = entries or _list_7z_entries(archive_path)
@@ -302,7 +303,18 @@ def safe_extract_archive(
         if os.path.commonpath([target_path, dest_dir]) != dest_dir:
             raise ValueError("Unsafe path in archive")
     os.makedirs(dest_dir, exist_ok=True)
-    result = _run_7z(["x", f"-o{dest_dir}", "-y", archive_path])
+    result = _run_7z_with_progress(
+        [
+            "x",
+            f"-o{dest_dir}",
+            "-y",
+            "-bb0",
+            "-bso0",
+            "-bsp1",
+            archive_path,
+        ],
+        on_progress=on_progress,
+    )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "7z failed to extract archive")
 
@@ -310,7 +322,7 @@ def safe_extract_archive(
     if archive_type in {"gzip", "bzip2", "xz"}:
         tar_path = _find_single_tar(dest_dir)
         if tar_path:
-            safe_extract_archive(tar_path, dest_dir)
+            safe_extract_archive(tar_path, dest_dir, on_progress=on_progress)
             os.remove(tar_path)
 
 

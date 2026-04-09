@@ -27,6 +27,7 @@ PROGRESS_PUSH_INTERVAL = 0.25
 
 def _new_job_state() -> dict[str, Any]:
     return {
+        "started": False,
         "status": "pending",
         "stage": "pending",
         "bytes": 0,
@@ -206,14 +207,30 @@ async def transfer_start(request: Request):
         max_bytes = None
 
     async with JOB_LOCK:
-        if job_id in JOB_STATE:
-            state = JOB_STATE[job_id]
+        state = JOB_STATE.get(job_id)
+        # WebSocket clients may connect before /transfer/start and create a
+        # placeholder state. Only treat jobs as existing once the transfer was
+        # actually scheduled.
+        if state and state.get("started"):
             return {
                 "job_id": job_id,
                 "status": state.get("status"),
                 "ws_url": f"/transfer/ws/{job_id}",
             }
-        JOB_STATE[job_id] = _new_job_state()
+        if not state:
+            state = _new_job_state()
+            JOB_STATE[job_id] = state
+        state.update(
+            {
+                "started": True,
+                "status": "pending",
+                "stage": "pending",
+                "bytes": 0,
+                "total": None,
+                "percent": None,
+                "error": None,
+            }
+        )
 
     meta = {
         "job_id": job_id,
@@ -432,6 +449,7 @@ async def transfer_upload(request: Request):
             state = _new_job_state()
             state.update(
                 {
+                    "started": True,
                     "status": "uploading",
                     "stage": "uploading",
                     "bytes": 0,
@@ -444,6 +462,7 @@ async def transfer_upload(request: Request):
         else:
             state.update(
                 {
+                    "started": True,
                     "status": "uploading",
                     "stage": "uploading",
                     "bytes": 0,
@@ -1068,6 +1087,16 @@ async def _broadcast_repack_progress(job_id: str, percent: int) -> None:
     await _broadcast(job_id, snapshot)
 
 
+async def _broadcast_extract_progress(job_id: str, percent: int) -> None:
+    percent = max(0, min(100, int(percent)))
+    async with JOB_LOCK:
+        state = JOB_STATE.setdefault(job_id, _new_job_state())
+        state["stage"] = "extracting"
+        state["percent"] = percent
+        snapshot = _state_event_payload("progress", state)
+    await _broadcast(job_id, snapshot)
+
+
 async def _run_repack_job(
     job_id: str,
     download_abs: str,
@@ -1085,7 +1114,6 @@ async def _run_repack_job(
     packed_rel = os.path.join("temp", job_id, "packed.zip")
     packed_abs = tools.safe_path(MAIN_DIR, packed_rel)
 
-    await _set_stage(job_id, "repacking")
     archive_type, is_encrypted, archive_entries = await anyio.to_thread.run_sync(
         tools.probe_archive, download_abs
     )
@@ -1164,12 +1192,45 @@ async def _run_repack_job(
             await anyio.to_thread.run_sync(shutil.rmtree, repack_abs)
         os.makedirs(repack_abs, exist_ok=True)
 
+        start_ts = time.monotonic()
+        extract_progress = {"last_push": time.monotonic(), "last_percent": -1}
+        repack_progress = {"last_push": time.monotonic(), "last_percent": -1}
+
+        def _emit_progress(
+            progress_state: dict[str, float | int],
+            stage: str,
+            percent: int,
+        ) -> None:
+            percent = max(0, min(100, int(percent)))
+            last_percent = int(progress_state["last_percent"])
+            now = time.monotonic()
+            if percent <= last_percent:
+                return
+            if percent < 100 and now - float(progress_state["last_push"]) < PROGRESS_PUSH_INTERVAL:
+                return
+            progress_state["last_percent"] = percent
+            progress_state["last_push"] = now
+            try:
+                if stage == "extracting":
+                    anyio.from_thread.run(_broadcast_extract_progress, job_id, percent)
+                else:
+                    anyio.from_thread.run(_broadcast_repack_progress, job_id, percent)
+            except Exception:
+                pass
+
         if archive_type:
+            await _set_stage(job_id, "extracting")
+            await _broadcast_extract_progress(job_id, 0)
+
+            def _on_extract_progress(percent: int) -> None:
+                _emit_progress(extract_progress, "extracting", percent)
+
             await anyio.to_thread.run_sync(
                 tools.safe_extract_archive,
                 download_abs,
                 repack_abs,
                 archive_entries,
+                _on_extract_progress,
             )
         else:
             dest_name = os.path.basename(download_abs)
@@ -1182,25 +1243,12 @@ async def _run_repack_job(
             except Exception:
                 logger.warning("failed to update meta download_path for job_id=%s", job_id)
 
-        start_ts = time.monotonic()
-        repack_progress = {"last_push": time.monotonic(), "last_percent": 0}
+        await _set_stage(job_id, "repacking")
+        await _broadcast_repack_progress(job_id, 0)
 
         def _on_repack_progress(percent: int) -> None:
-            percent = max(0, min(100, int(percent)))
-            last_percent = int(repack_progress["last_percent"])
-            now = time.monotonic()
-            if percent <= last_percent:
-                return
-            if percent < 100 and now - float(repack_progress["last_push"]) < PROGRESS_PUSH_INTERVAL:
-                return
-            repack_progress["last_percent"] = percent
-            repack_progress["last_push"] = now
-            try:
-                anyio.from_thread.run(_broadcast_repack_progress, job_id, percent)
-            except Exception:
-                pass
+            _emit_progress(repack_progress, "repacking", percent)
 
-        await _broadcast_repack_progress(job_id, 0)
         await anyio.to_thread.run_sync(
             tools.zip_dir_with_level,
             repack_abs,
