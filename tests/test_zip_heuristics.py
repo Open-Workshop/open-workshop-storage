@@ -1,0 +1,74 @@
+import importlib
+import sys
+import unittest
+from types import ModuleType
+
+
+def _load_tools_module():
+    config = ModuleType("ow_config")
+    config.MAIN_DIR = "/tmp/storage-tests"
+    config.MANAGER_URL = "http://127.0.0.1:8000/api/manager"
+    config.MANAGER_TRANSFER_CALLBACK_URL = ""
+    config.TRANSFER_JWT_SECRET = "test-secret-with-safe-length-32+"
+    config.TRANSFER_CALLBACK_TTL_SECONDS = 600
+    config.TRANSFER_MAX_BYTES = 0
+
+    sys.modules["ow_config"] = config
+    sys.modules["bcrypt"] = ModuleType("bcrypt")
+    sys.modules["jwt"] = ModuleType("jwt")
+    pil_module = ModuleType("PIL")
+    pil_module.Image = object
+    pil_module.UnidentifiedImageError = RuntimeError
+    sys.modules["PIL"] = pil_module
+    sys.modules.pop("tools", None)
+    return importlib.import_module("tools")
+
+
+class ZipHeuristicsTests(unittest.TestCase):
+    def test_allows_mixed_store_and_deflate_when_total_savings_is_meaningful(self):
+        tools = _load_tools_module()
+        entries = [
+            {"Type": "zip"},
+            {
+                "Path": "archive/random.bin",
+                "Folder": "-",
+                "Size": "100000",
+                "Packed Size": "100000",
+                "Method": "Store",
+            },
+            {
+                "Path": "archive/text.txt",
+                "Folder": "-",
+                "Size": "100000",
+                "Packed Size": "341",
+                "Method": "Deflate",
+            },
+        ]
+
+        self.assertTrue(tools.zip_uses_deflated_or_better("unused.zip", entries))
+
+    def test_rejects_zip_when_total_savings_is_below_threshold(self):
+        tools = _load_tools_module()
+        entries = [
+            {"Type": "zip"},
+            {
+                "Path": "archive/a.bin",
+                "Folder": "-",
+                "Size": "100000",
+                "Packed Size": "99550",
+                "Method": "Deflate",
+            },
+            {
+                "Path": "archive/b.bin",
+                "Folder": "-",
+                "Size": "100000",
+                "Packed Size": "99550",
+                "Method": "Store",
+            },
+        ]
+
+        self.assertFalse(tools.zip_uses_deflated_or_better("unused.zip", entries))
+
+
+if __name__ == "__main__":
+    unittest.main()

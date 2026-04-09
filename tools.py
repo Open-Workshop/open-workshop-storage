@@ -21,6 +21,7 @@ ALLOWED_FILENAME_CHARS_WITH_DOT = ALLOWED_FILENAME_CHARS | {"."}
 TRANSFER_JWT_ALG = "HS256"
 SEVEN_ZIP_BIN = "7z"
 SEVEN_ZIP_PROGRESS_RE = re.compile(r"(?<!\d)(100|[1-9]?\d)%")
+ZIP_MIN_COMPRESSION_SAVINGS_RATIO = 0.01
 
 
 def safe_path(base_dir: str, path: str) -> str:
@@ -207,6 +208,31 @@ def archive_entries_unpacked_bytes(entries: Optional[list[dict[str, str]]]) -> O
         total += size
     return total
 
+
+def archive_entries_packed_bytes(entries: Optional[list[dict[str, str]]]) -> Optional[int]:
+    if entries is None:
+        return None
+
+    total = 0
+    for entry in entries:
+        if entry.get("Type"):
+            continue
+        if not entry.get("Path"):
+            continue
+        if entry.get("Folder") == "+":
+            continue
+        raw_size = entry.get("Packed Size")
+        if raw_size is None:
+            return None
+        try:
+            size = int(raw_size)
+        except (TypeError, ValueError):
+            return None
+        if size < 0:
+            return None
+        total += size
+    return total
+
 def zip_dir_with_level(
     src_dir: str,
     dest_zip_path: str,
@@ -261,14 +287,20 @@ def zip_uses_deflated_or_better(
         if "lzma" in method or "bzip2" in method or "ppmd" in method:
             continue
         if "store" in method:
-            try:
-                size = int(entry.get("Size", "0"))
-            except ValueError:
-                size = 0
-            if size == 0:
-                continue
+            continue
         return False
-    return True
+
+    unpacked_bytes = archive_entries_unpacked_bytes(entries)
+    packed_bytes = archive_entries_packed_bytes(entries)
+    if unpacked_bytes is None or packed_bytes is None:
+        return False
+    if unpacked_bytes <= 0:
+        return True
+    if packed_bytes >= unpacked_bytes:
+        return False
+
+    savings_ratio = (unpacked_bytes - packed_bytes) / unpacked_bytes
+    return savings_ratio >= ZIP_MIN_COMPRESSION_SAVINGS_RATIO
 
 
 def _find_single_tar(dest_dir: str) -> Optional[str]:
