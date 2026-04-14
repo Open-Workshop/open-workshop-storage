@@ -35,6 +35,7 @@ def _new_job_state() -> dict[str, Any]:
         "percent": None,
         "error": None,
         "clients": [],
+        "last_activity": time.time(),
     }
 
 
@@ -61,6 +62,7 @@ async def _check_7z_dependency() -> None:
     except Exception as exc:
         logger.error("7z dependency missing: %s", exc)
         raise
+    asyncio.create_task(_cleanup_loop())
 
 @app.middleware("http")
 async def modify_header(request: Request, call_next):
@@ -229,6 +231,7 @@ async def transfer_start(request: Request):
                 "total": None,
                 "percent": None,
                 "error": None,
+                "last_activity": time.time(),
             }
         )
 
@@ -456,6 +459,7 @@ async def transfer_upload(request: Request):
                     "total": total,
                     "percent": None,
                     "error": None,
+                    "last_activity": time.time(),
                 }
             )
             JOB_STATE[job_id] = state
@@ -469,6 +473,7 @@ async def transfer_upload(request: Request):
                     "total": total,
                     "percent": None,
                     "error": None,
+                    "last_activity": time.time(),
                 }
             )
 
@@ -521,6 +526,7 @@ async def transfer_upload(request: Request):
                             "reason": "size_limit",
                         }
                     )
+                    await _job_error_cleanup(job_id, "size_limit")
                     return PlainTextResponse(status_code=413, content="File too large")
 
                 await anyio.to_thread.run_sync(out_file.write, chunk)
@@ -603,6 +609,7 @@ async def transfer_upload(request: Request):
                         "reason": "encrypted_zip",
                     }
                 )
+                await _job_error_cleanup(job_id, "encrypted_zip")
                 return PlainTextResponse(status_code=400, content="Encrypted zip not allowed")
 
             await _set_stage(job_id, "uploaded")
@@ -656,6 +663,7 @@ async def transfer_upload(request: Request):
                         "reason": "not_image",
                     }
                 )
+                await _job_error_cleanup(job_id, "not_image")
                 return PlainTextResponse(status_code=400, content="Image expected")
             except Exception:
                 logger.exception("transfer image preparation failed job_id=%s", job_id)
@@ -674,6 +682,7 @@ async def transfer_upload(request: Request):
                         "reason": "image_prepare_failed",
                     }
                 )
+                await _job_error_cleanup(job_id, "image_prepare_failed")
                 return PlainTextResponse(status_code=500, content="Image preparation failed")
 
             try:
@@ -1065,6 +1074,7 @@ async def _close_clients(job_id: str) -> None:
 async def _set_state(job_id: str, **updates: Any) -> None:
     async with JOB_LOCK:
         state = JOB_STATE.setdefault(job_id, _new_job_state())
+        updates["last_activity"] = time.time()
         state.update(updates)
 
 
@@ -1073,8 +1083,82 @@ async def _set_stage(job_id: str, stage: str) -> None:
         state = JOB_STATE.setdefault(job_id, _new_job_state())
         state["stage"] = stage
         state["percent"] = None
+        state["last_activity"] = time.time()
         payload = _state_event_payload("stage", state)
     await _broadcast(job_id, payload)
+
+
+async def _delete_job_and_dir(job_id: str) -> None:
+    async with JOB_LOCK:
+        state = JOB_STATE.get(job_id)
+        state_copy = None
+        clients_to_close = []
+        if state:
+            state_copy = state.copy()
+            clients_to_close = list(state.get("clients", []))
+            del JOB_STATE[job_id]
+    
+    for ws in clients_to_close:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+    
+    try:
+        job_dir = _job_dir(job_id)
+        if os.path.exists(job_dir):
+            await anyio.to_thread.run_sync(shutil.rmtree, job_dir)
+    except Exception:
+        logger.warning("failed to cleanup job dir %s", job_id)
+
+
+async def _job_error_cleanup(job_id: str, reason: str) -> None:
+    logger.info("job error cleanup job_id=%s reason=%s", job_id, reason)
+    await _delete_job_and_dir(job_id)
+
+
+async def _run_cleanup() -> None:
+    now = time.time()
+    cleanup_threshold = getattr(config, "JOB_TTL_SECONDS", 10800)
+    
+    jobs_to_remove = []
+    
+    async with JOB_LOCK:
+        for job_id, state in list(JOB_STATE.items()):
+            last_activity = state.get("last_activity", 0)
+            if now - last_activity >= cleanup_threshold:
+                jobs_to_remove.append(job_id)
+    
+    for job_id in jobs_to_remove:
+        await _delete_job_and_dir(job_id)
+        logger.info("cleanup removed inactive job job_id=%s", job_id)
+    
+    try:
+        if os.path.exists(TEMP_DIR):
+            for job_folder in os.listdir(TEMP_DIR):
+                job_path = os.path.join(TEMP_DIR, job_folder)
+                if not os.path.isdir(job_path):
+                    continue
+                if job_folder not in JOB_STATE:
+                    try:
+                        mod_time = os.path.getmtime(job_path)
+                        if now - mod_time >= cleanup_threshold:
+                            await anyio.to_thread.run_sync(shutil.rmtree, job_path)
+                            logger.info("cleanup removed old dir job_id=%s", job_folder)
+                    except Exception:
+                        logger.warning("failed to check/cleanup old dir job_id=%s", job_folder)
+    except Exception:
+        logger.exception("cleanup failed to scan temp dir")
+
+
+async def _cleanup_loop() -> None:
+    cleanup_interval = getattr(config, "CLEANUP_INTERVAL_SECONDS", 60)
+    while True:
+        try:
+            await asyncio.sleep(cleanup_interval)
+            await _run_cleanup()
+        except Exception:
+            logger.exception("cleanup loop failed")
 
 
 async def _broadcast_repack_progress(job_id: str, percent: int) -> None:
@@ -1461,6 +1545,7 @@ async def _run_download_job(
                     "reason": repack_reason or "repack_failed",
                 }
             )
+            await _job_error_cleanup(job_id, repack_reason or "repack_failed")
             return
 
         await _broadcast(job_id, await _build_state_event(job_id, "complete"))
@@ -1498,6 +1583,7 @@ async def _run_download_job(
         await _notify_manager(
             {**callback_payload, "job_id": job_id, "status": "error", "reason": "exception"}
         )
+        await _job_error_cleanup(job_id, "download_exception")
     finally:
         await _close_clients(job_id)
 

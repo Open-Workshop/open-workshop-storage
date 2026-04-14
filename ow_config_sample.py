@@ -6,6 +6,10 @@ TRANSFER_JWT_SECRET = ''
 TRANSFER_CALLBACK_TTL_SECONDS = 600
 TRANSFER_MAX_BYTES = 0
 
+# Cleanup settings
+CLEANUP_INTERVAL_SECONDS = 60  # Интервал между проверками очистки
+JOB_TTL_SECONDS = 10800  # Время неактивности перед удалением job (3 часа)
+
 # Токены
 
 ## Отправляемые
