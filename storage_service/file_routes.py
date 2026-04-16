@@ -1,0 +1,340 @@
+from __future__ import annotations
+
+import os
+from typing import Callable, Optional
+
+import aiohttp
+import anyio
+from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse, PlainTextResponse
+
+from .context import ServiceContext
+
+
+router = APIRouter()
+_context_provider: Optional[Callable[[], ServiceContext]] = None
+
+
+def configure_context_provider(provider: Callable[[], ServiceContext]) -> None:
+    global _context_provider
+    _context_provider = provider
+
+
+def _ctx() -> ServiceContext:
+    if _context_provider is None:
+        raise RuntimeError("file context provider is not configured")
+    return _context_provider()
+
+
+@router.api_route(
+    "/download/{type}/{path:path}",
+    methods=["GET", "HEAD"],
+    tags=["Files"],
+    summary="Download stored file",
+    description=(
+        "Downloads a stored file. For archive/mod downloads access is validated via Manager. "
+        "Optional query param `filename` can be used to override download name (safe chars only)."
+    ),
+    status_code=200,
+    response_class=FileResponse,
+    responses={
+        200: {
+            "description": "File send successfully",
+            "content": {"application/octet-stream": {}},
+        },
+        400: {
+            "description": "Invalid type",
+            "content": {"text/plain": {"example": "Invalid type"}},
+        },
+        403: {
+            "description": "Access denied",
+            "content": {"text/plain": {"example": "Access denied"}},
+        },
+        423: {
+            "description": "Access denied",
+            "content": {"text/plain": {"example": "Access denied"}},
+        },
+        404: {
+            "description": "File not found on server",
+            "content": {"text/plain": {"example": "File not found"}},
+        },
+        503: {
+            "description": "Manager unavailable",
+            "content": {"text/plain": {"example": "Manager unavailable"}},
+        },
+    },
+)
+async def download(request: Request, type: str, path: str, filename: Optional[str] = None):
+    ctx = _ctx()
+    client = request.client.host if request.client else "unknown"
+    ctx.logger.info("download request type=%s path=%s client=%s", type, path, client)
+    if not ctx.tools.is_allowed_type(type):
+        ctx.logger.warning("download invalid type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=400, content="Invalid type")
+    base_dir = os.path.join(ctx.main_dir, type)
+    try:
+        real_path = ctx.tools.safe_path(base_dir, path)
+    except ValueError:
+        ctx.logger.warning("download path traversal type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=423, content="Access denied")
+
+    if not os.path.isfile(real_path):
+        ctx.logger.info("download not found type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=404, content="File not found")
+
+    download_name = ctx.tools.build_download_filename(filename, real_path)
+
+    async def file_response_with_meta() -> FileResponse:
+        response = FileResponse(real_path, filename=download_name)
+        if request.method == "HEAD" and type == "archive" and path.startswith("mods/"):
+            try:
+                _, is_encrypted, archive_entries = await anyio.to_thread.run_sync(
+                    ctx.tools.probe_archive,
+                    real_path,
+                )
+                if not is_encrypted:
+                    unpacked_bytes = await anyio.to_thread.run_sync(
+                        ctx.tools.archive_entries_unpacked_bytes,
+                        archive_entries,
+                    )
+                    if unpacked_bytes is not None:
+                        response.headers["X-Unpacked-Bytes"] = str(unpacked_bytes)
+            except Exception:
+                ctx.logger.warning(
+                    "download unpacked header failed type=%s path=%s client=%s",
+                    type,
+                    path,
+                    client,
+                )
+        return response
+
+    if type == "archive" and path.startswith("mod/"):
+        parts = path.split("/", 2)
+        if len(parts) < 2:
+            ctx.logger.info("download not found (bad mod path) type=%s path=%s client=%s", type, path, client)
+            return PlainTextResponse(status_code=404, content="File not found")
+        try:
+            mod_id = int(parts[1])
+        except ValueError:
+            ctx.logger.info("download not found (bad mod id) type=%s path=%s client=%s", type, path, client)
+            return PlainTextResponse(status_code=404, content="File not found")
+        async with aiohttp.ClientSession() as session:
+            user = request.cookies.get("userID", 0)
+            headers = {"x-token": f"{ctx.config.check_access}"}
+            async with session.get(
+                f"{ctx.manager_url}/mods/access/[{mod_id}]?user={user}",
+                headers=headers,
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if mod_id in data:
+                        ctx.logger.info(
+                            "download allowed mod_id=%s type=%s path=%s client=%s",
+                            mod_id,
+                            type,
+                            path,
+                            client,
+                        )
+                        return await file_response_with_meta()
+                    ctx.logger.warning(
+                        "download denied mod_id=%s type=%s path=%s client=%s",
+                        mod_id,
+                        type,
+                        path,
+                        client,
+                    )
+                    return PlainTextResponse(status_code=403, content="Access denied")
+                ctx.logger.warning(
+                    "manager unavailable status=%s mod_id=%s client=%s",
+                    resp.status,
+                    mod_id,
+                    client,
+                )
+                return PlainTextResponse(status_code=503, content="Manager unavailable")
+
+    ctx.logger.info("download ok type=%s path=%s client=%s", type, path, client)
+    return await file_response_with_meta()
+
+
+@router.post(
+    "/upload",
+    tags=["Files"],
+    summary="Upload file to Storage (internal)",
+    description=(
+        "Internal upload endpoint for Manager. "
+        "Accepts multipart form-data with file, type, path and file_kind. "
+        "Requires upload token."
+    ),
+    status_code=201,
+    response_class=PlainTextResponse,
+    response_model=str,
+    responses={
+        201: {
+            "description": "File uploaded successfully",
+            "content": {"text/plain": {"example": "file/is/saved/as.tmp"}},
+            "model": str,
+        },
+        401: {
+            "description": "Token not found",
+            "content": {"text/plain": {"example": "Token not found"}},
+            "model": str,
+        },
+        400: {
+            "description": "Invalid type",
+            "content": {"text/plain": {"example": "Invalid type"}},
+            "model": str,
+        },
+    },
+)
+async def upload(
+    request: Request,
+    file: UploadFile = File(),
+    type: str = Form(),
+    path: str = Form(),
+    file_kind: str = Form("bin"),
+    token: str = Form(),
+):
+    ctx = _ctx()
+    client = request.client.host if request.client else "unknown"
+    ctx.logger.info(
+        "upload request type=%s path=%s file_kind=%s filename=%s client=%s",
+        type,
+        path,
+        file_kind,
+        file.filename,
+        client,
+    )
+    if not token:
+        ctx.logger.warning("upload denied (token missing) type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=401, content="Token not found")
+    if not await anyio.to_thread.run_sync(ctx.tools.check_token, "upload_file", token):
+        ctx.logger.warning("upload denied (token) type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=403, content="Access denied")
+    if not ctx.tools.is_allowed_upload_type(type):
+        ctx.logger.warning("upload invalid type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=400, content="Invalid type")
+    normalized_file_kind = ctx.tools.normalize_file_kind(file_kind, default="")
+    if not normalized_file_kind:
+        ctx.logger.warning(
+            "upload invalid file_kind=%s type=%s path=%s client=%s",
+            file_kind,
+            type,
+            path,
+            client,
+        )
+        return PlainTextResponse(status_code=400, content="Invalid file kind")
+    if type == "avatar" and normalized_file_kind != "img":
+        return PlainTextResponse(status_code=400, content="Avatar requires image file kind")
+
+    base_dir = os.path.join(ctx.main_dir, type)
+    try:
+        real_path = ctx.tools.safe_path(base_dir, path)
+    except ValueError:
+        ctx.logger.warning("upload path traversal type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=423, content="Access denied")
+    if not os.path.exists(os.path.dirname(real_path)):
+        os.makedirs(os.path.dirname(real_path))
+
+    if normalized_file_kind == "img":
+        if not path.lower().endswith(".webp"):
+            return PlainTextResponse(status_code=400, content="Image storage path must end with .webp")
+        raw_bytes = await file.read()
+        try:
+            webp_bytes = await anyio.to_thread.run_sync(ctx.tools.image_bytes_to_webp, raw_bytes)
+        except ValueError:
+            return PlainTextResponse(status_code=400, content="Image expected")
+
+        def _write_bytes_sync() -> None:
+            with open(real_path, "wb") as out_file:
+                out_file.write(webp_bytes)
+
+        await anyio.to_thread.run_sync(_write_bytes_sync)
+    else:
+        await anyio.to_thread.run_sync(ctx.tools.copy_fileobj_to_path, file.file, real_path)
+    ctx.logger.info(
+        "upload saved type=%s path=%s file_kind=%s client=%s",
+        type,
+        path,
+        normalized_file_kind,
+        client,
+    )
+    return path
+
+
+@router.delete(
+    "/delete",
+    tags=["Files"],
+    summary="Delete file from Storage (internal)",
+    description=(
+        "Internal delete endpoint for Manager. "
+        "Deletes file and empty parent folders. Requires delete token."
+    ),
+    status_code=200,
+    response_class=PlainTextResponse,
+    response_model=str,
+    responses={
+        200: {
+            "description": "File deleted successfully",
+            "content": {"text/plain": {"example": "File deleted"}},
+            "model": str,
+        },
+        401: {
+            "description": "Token not found",
+            "content": {"text/plain": {"example": "Token not found"}},
+            "model": str,
+        },
+        400: {
+            "description": "Invalid type",
+            "content": {"text/plain": {"example": "Invalid type"}},
+            "model": str,
+        },
+        404: {
+            "description": "File not found on server",
+            "content": {"text/plain": {"example": "File not found"}},
+            "model": str,
+        },
+    },
+)
+async def delete(request: Request, type: str = Form(), path: str = Form(), token: str = Form()):
+    ctx = _ctx()
+    client = request.client.host if request.client else "unknown"
+    ctx.logger.info("delete request type=%s path=%s client=%s", type, path, client)
+    if not token:
+        ctx.logger.warning("delete denied (token missing) type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=401, content="Token not found")
+    if not await anyio.to_thread.run_sync(ctx.tools.check_token, "delete_file", token):
+        ctx.logger.warning("delete denied (token) type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=403, content="Access denied")
+    if not ctx.tools.is_allowed_type(type):
+        ctx.logger.warning("delete invalid type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=400, content="Invalid type")
+
+    base_dir = os.path.join(ctx.main_dir, type)
+    try:
+        real_path = ctx.tools.safe_path(base_dir, path)
+    except ValueError:
+        ctx.logger.warning("delete path traversal type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=403, content="Access denied")
+
+    def delete_file_and_parent_folders(file_path: str, root_dir: str):
+        if not os.path.isfile(file_path):
+            ctx.logger.info("delete not found type=%s path=%s client=%s", type, path, client)
+            return PlainTextResponse(status_code=404, content="File not found")
+        os.remove(file_path)
+        folder_path = os.path.dirname(file_path)
+        root_dir = os.path.abspath(root_dir)
+        while (
+            folder_path
+            and os.path.commonpath([folder_path, root_dir]) == root_dir
+            and folder_path != root_dir
+        ):
+            if not os.listdir(folder_path):
+                os.rmdir(folder_path)
+                folder_path = os.path.dirname(folder_path)
+            else:
+                break
+
+        ctx.logger.info("delete ok type=%s path=%s client=%s", type, path, client)
+        return PlainTextResponse(status_code=200, content="File deleted")
+
+    return await anyio.to_thread.run_sync(delete_file_and_parent_folders, real_path, base_dir)
