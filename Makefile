@@ -8,6 +8,9 @@ type-check:
 
 format:
 	$(PYTHON) -m isort $(SRC_DIRS)
+	$(PYTHON) -m black $(SRC_DIRS)
 
 lint:
+	$(PYTHON) -m isort --check-only $(SRC_DIRS)
+	$(PYTHON) -m black --check $(SRC_DIRS)
 	$(PYTHON) -m flake8 $(SRC_DIRS)

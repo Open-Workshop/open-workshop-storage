@@ -1,4 +1,5 @@
 """OpenTelemetry setup for exporting traces to Uptrace."""
+
 from __future__ import annotations
 
 import atexit
@@ -11,9 +12,7 @@ from fastapi import FastAPI
 
 _LOG = logging.getLogger(__name__)
 _INSTRUMENTED = False
-_DEFAULT_FASTAPI_EXCLUDED_URLS = (
-    r"^.*/docs$,^.*/openapi\.json$,^/favicon\.ico$,^/robots\.txt$"
-)
+_DEFAULT_FASTAPI_EXCLUDED_URLS = r"^.*/docs$,^.*/openapi\.json$,^/favicon\.ico$,^/robots\.txt$"
 HookSpanName = Literal["receive", "send"]
 
 
@@ -150,10 +149,7 @@ def setup_uptrace_telemetry(app: FastAPI) -> bool:
 
     service_name = _read_setting("OTEL_SERVICE_NAME", "open-workshop-storage") or "open-workshop-storage"
     service_version = _read_setting("OTEL_SERVICE_VERSION", "dev") or "dev"
-    service_environment = (
-        _read_setting("OTEL_DEPLOYMENT_ENVIRONMENT", "production")
-        or "production"
-    )
+    service_environment = _read_setting("OTEL_DEPLOYMENT_ENVIRONMENT", "production") or "production"
     traces_endpoint = _read_setting("UPTRACE_OTLP_TRACES_URL")
     grpc_endpoint = _read_setting("UPTRACE_OTLP_GRPC_URL")
     protocol = (_read_setting("UPTRACE_OTLP_PROTOCOL") or "").lower().strip()
@@ -161,9 +157,7 @@ def setup_uptrace_telemetry(app: FastAPI) -> bool:
         "UPTRACE_FASTAPI_EXCLUDED_URLS",
         _DEFAULT_FASTAPI_EXCLUDED_URLS,
     )
-    fastapi_exclude_spans = _parse_fastapi_exclude_spans(
-        _read_setting("UPTRACE_FASTAPI_EXCLUDE_SPANS", "receive,send")
-    )
+    fastapi_exclude_spans = _parse_fastapi_exclude_spans(_read_setting("UPTRACE_FASTAPI_EXCLUDE_SPANS", "receive,send"))
 
     try:
         from opentelemetry import trace
@@ -237,9 +231,7 @@ def setup_uptrace_telemetry(app: FastAPI) -> bool:
         _LOG.info("Uptrace telemetry enabled for service %s via %s.", service_name, protocol)
         return True
     except ImportError:
-        _LOG.exception(
-            "OpenTelemetry packages are missing. Install dependencies from requirements.txt."
-        )
+        _LOG.exception("OpenTelemetry packages are missing. Install dependencies from requirements.txt.")
         return False
     except Exception:
         _LOG.exception("Failed to initialize Uptrace telemetry.")

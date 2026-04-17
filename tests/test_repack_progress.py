@@ -78,9 +78,7 @@ class RepackProgressTests(unittest.TestCase):
             self.assertEqual(unpacked_bytes, 123)
             self.assertIsNone(reason)
 
-            zip_start_index = next(
-                index for index, item in enumerate(timeline) if item[0] == "zip-start"
-            )
+            zip_start_index = next(index for index, item in enumerate(timeline) if item[0] == "zip-start")
             extract_progress_before_zip = [
                 item[1]
                 for item in timeline[:zip_start_index]

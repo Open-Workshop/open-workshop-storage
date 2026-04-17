@@ -133,12 +133,8 @@ async def run_repack_job(
     packed_rel = os.path.join("temp", job_id, "packed.zip")
     packed_abs = ctx.tools.safe_path(ctx.main_dir, packed_rel)
 
-    archive_type, is_encrypted, archive_entries = await anyio.to_thread.run_sync(
-        ctx.tools.probe_archive, download_abs
-    )
-    unpacked_bytes = await anyio.to_thread.run_sync(
-        ctx.tools.archive_entries_unpacked_bytes, archive_entries
-    )
+    archive_type, is_encrypted, archive_entries = await anyio.to_thread.run_sync(ctx.tools.probe_archive, download_abs)
+    unpacked_bytes = await anyio.to_thread.run_sync(ctx.tools.archive_entries_unpacked_bytes, archive_entries)
     if is_encrypted:
         await ctx.set_state(job_id, status="error", error="encrypted_zip")
         await ctx.broadcast(
@@ -479,9 +475,7 @@ async def run_download_job(
             job_id,
             await ctx.build_state_event(job_id, "error", message="download failed"),
         )
-        await ctx.notify_manager(
-            {**callback_payload, "job_id": job_id, "status": "error", "reason": "exception"}
-        )
+        await ctx.notify_manager({**callback_payload, "job_id": job_id, "status": "error", "reason": "exception"})
         await ctx.job_error_cleanup(job_id, "download_exception")
     finally:
         await ctx.close_clients(job_id)

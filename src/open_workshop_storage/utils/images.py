@@ -9,9 +9,7 @@ def image_bytes_to_webp(data: bytes, quality: int = 80) -> bytes:
     try:
         with Image.open(BytesIO(data)) as img:
             img.load()
-            if img.mode in ("RGBA", "LA") or (
-                img.mode == "P" and "transparency" in img.info
-            ):
+            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
                 converted = img.convert("RGBA")
             else:
                 converted = img.convert("RGB")

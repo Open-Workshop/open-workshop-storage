@@ -288,8 +288,7 @@ async def upload(
     tags=["Files"],
     summary="Delete file from Storage (internal)",
     description=(
-        "Internal delete endpoint for Manager. "
-        "Deletes file and empty parent folders. Requires delete token."
+        "Internal delete endpoint for Manager. " "Deletes file and empty parent folders. Requires delete token."
     ),
     status_code=200,
     response_class=PlainTextResponse,
@@ -355,11 +354,7 @@ async def delete(
         os.remove(file_path)
         folder_path = os.path.dirname(file_path)
         root_dir = os.path.abspath(root_dir)
-        while (
-            folder_path
-            and os.path.commonpath([folder_path, root_dir]) == root_dir
-            and folder_path != root_dir
-        ):
+        while folder_path and os.path.commonpath([folder_path, root_dir]) == root_dir and folder_path != root_dir:
             if not os.listdir(folder_path):
                 os.rmdir(folder_path)
                 folder_path = os.path.dirname(folder_path)

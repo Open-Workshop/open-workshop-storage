@@ -15,6 +15,7 @@ opentelemetry-instrumentation-aiohttp-client
 mypy
 isort
 flake8
+black
 
 # System dependency (required at runtime):
 # 7z (p7zip / p7zip-full)

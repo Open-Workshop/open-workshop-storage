@@ -151,9 +151,7 @@ def _read_upload_size_hint(request: Request) -> Optional[int]:
     if total is None:
         total = _parse_non_negative_int(request.query_params.get("size"))
     if total is None:
-        total = _parse_non_negative_int(
-            request.headers.get("X-File-Size") or request.headers.get("X-Upload-Size")
-        )
+        total = _parse_non_negative_int(request.headers.get("X-File-Size") or request.headers.get("X-Upload-Size"))
     return total
 
 
@@ -605,9 +603,7 @@ async def transfer_start(request: Request):
         "pack_level": pack_level,
         "update_only": update_only,
     }
-    asyncio.create_task(
-        ctx.run_download_job(job_id, download_url, download_abs, max_bytes, callback_payload)
-    )
+    asyncio.create_task(ctx.run_download_job(job_id, download_url, download_abs, max_bytes, callback_payload))
 
     return {
         "job_id": job_id,
@@ -927,8 +923,7 @@ async def transfer_repack(
     tags=["Transfer"],
     summary="Move packed archive to permanent storage",
     description=(
-        "Moves repacked file to permanent storage path. "
-        "Requires `storage_manage_token` and a valid job_id."
+        "Moves repacked file to permanent storage path. " "Requires `storage_manage_token` and a valid job_id."
     ),
     responses={
         200: {
