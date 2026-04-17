@@ -10,6 +10,8 @@ import aiohttp
 import anyio
 
 from .context import JsonDict, ServiceContext
+from .job_meta import update_job_meta
+from .job_state import state_event_payload
 
 
 async def run_cleanup(ctx: ServiceContext) -> None:
@@ -61,14 +63,7 @@ async def _broadcast_progress(ctx: ServiceContext, job_id: str, stage: str, perc
         state = ctx.job_state.setdefault(job_id, ctx.new_job_state())
         state["stage"] = stage
         state["percent"] = percent
-        snapshot = {
-            "event": "progress",
-            "bytes": state.get("bytes", 0),
-            "total": state.get("total"),
-            "status": state.get("status"),
-            "stage": state.get("stage"),
-            "percent": state.get("percent"),
-        }
+        snapshot = state_event_payload("progress", state)
     await ctx.broadcast(job_id, snapshot)
 
 
@@ -78,22 +73,6 @@ async def _broadcast_repack_progress(ctx: ServiceContext, job_id: str, percent: 
 
 async def _broadcast_extract_progress(ctx: ServiceContext, job_id: str, percent: int) -> None:
     await _broadcast_progress(ctx, job_id, "extracting", percent)
-
-
-async def _update_meta_fields(
-    ctx: ServiceContext,
-    job_id: str,
-    updates: JsonDict,
-    *,
-    warning_suffix: str = "",
-) -> None:
-    try:
-        meta = await anyio.to_thread.run_sync(ctx.read_meta_sync, job_id)
-        meta.update(updates)
-        await anyio.to_thread.run_sync(ctx.write_meta_sync, job_id, meta)
-    except Exception:
-        suffix = f" {warning_suffix}" if warning_suffix else ""
-        ctx.logger.warning("failed to update meta%s for job_id=%s", suffix, job_id)
 
 
 async def notify_manager(ctx: ServiceContext, payload: JsonDict) -> None:
@@ -166,7 +145,7 @@ async def run_repack_job(
             job_id,
             await ctx.build_state_event(job_id, "error", message="zip encrypted"),
         )
-        await _update_meta_fields(
+        await update_job_meta(
             ctx,
             job_id,
             {"status": "error", "error_reason": "encrypted_zip"},
@@ -185,7 +164,7 @@ async def run_repack_job(
                 packed_rel = os.path.relpath(download_abs, ctx.main_dir)
                 packed_abs = download_abs
                 packed_bytes = os.path.getsize(packed_abs)
-                await _update_meta_fields(
+                await update_job_meta(
                     ctx,
                     job_id,
                     {
@@ -208,7 +187,7 @@ async def run_repack_job(
 
     if os.path.exists(packed_abs):
         packed_bytes = os.path.getsize(packed_abs)
-        await _update_meta_fields(
+        await update_job_meta(
             ctx,
             job_id,
             {
@@ -273,11 +252,11 @@ async def run_repack_job(
             dest_name = os.path.basename(download_abs)
             dest_path = os.path.join(repack_abs, dest_name)
             await anyio.to_thread.run_sync(shutil.move, download_abs, dest_path)
-            await _update_meta_fields(
+            await update_job_meta(
                 ctx,
                 job_id,
                 {"download_path": os.path.relpath(dest_path, ctx.main_dir)},
-                warning_suffix="download_path",
+                warning_message="failed to update meta download_path for job_id=%s",
             )
 
         await ctx.set_stage(job_id, "repacking")
@@ -297,7 +276,7 @@ async def run_repack_job(
             await _broadcast_repack_progress(ctx, job_id, 100)
         duration = time.monotonic() - start_ts
         packed_bytes = os.path.getsize(packed_abs)
-        await _update_meta_fields(
+        await update_job_meta(
             ctx,
             job_id,
             {
@@ -339,11 +318,11 @@ async def run_download_job(
     downloaded = 0
     total = None
     last_push = 0.0
-    await _update_meta_fields(
+    await update_job_meta(
         ctx,
         job_id,
         {"status": "downloading", "download_started_at": int(time.time())},
-        warning_suffix="(start)",
+        warning_message="failed to update meta (start) for job_id=%s",
     )
     try:
         async with aiohttp.ClientSession() as session:
@@ -432,7 +411,7 @@ async def run_download_job(
                             )
 
         await ctx.set_state(job_id, status="done", bytes=downloaded, total=total)
-        await _update_meta_fields(
+        await update_job_meta(
             ctx,
             job_id,
             {
@@ -486,7 +465,7 @@ async def run_download_job(
                 os.remove(download_abs)
         except Exception:
             ctx.logger.warning("failed to cleanup partial file job_id=%s", job_id)
-        await _update_meta_fields(
+        await update_job_meta(
             ctx,
             job_id,
             {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import os
 import shutil
 import time
@@ -12,10 +13,69 @@ from fastapi import APIRouter, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
 
 from .context import ServiceContext
+from .job_meta import update_job_meta
+from .job_state import reset_job_state, state_event_payload
 
 
 router = APIRouter()
 _context_provider: Optional[Callable[[], ServiceContext]] = None
+
+TRANSFER_START_DESCRIPTION = (
+    "Starts a background download from the URL embedded in the transfer JWT. "
+    "JWT must contain: job_id, mod_id (optional), download_url, pack_format, pack_level. "
+    "Token can be passed as query param `token` or form field `token` for POST. "
+    "Returns job_id and WebSocket URL for progress updates."
+)
+TRANSFER_START_RESPONSES = {
+    200: {
+        "description": "Transfer started",
+        "content": {
+            "application/json": {
+                "example": {
+                    "job_id": "3f2c1b7a0c9f4c7c8e5f1a2b3c4d5e6f",
+                    "status": "started",
+                    "ws_url": "/transfer/ws/3f2c1b7a0c9f4c7c8e5f1a2b3c4d5e6f",
+                }
+            }
+        },
+    },
+    400: {"description": "Invalid request", "content": {"text/plain": {"example": "Invalid job id"}}},
+    401: {"description": "Token not found", "content": {"text/plain": {"example": "Token not found"}}},
+    403: {"description": "Access denied", "content": {"text/plain": {"example": "Access denied"}}},
+}
+TRANSFER_START_OPENAPI_EXTRA = {
+    "parameters": [
+        {
+            "name": "token",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "string"},
+            "description": "Transfer JWT (can also be sent in form body for POST).",
+        }
+    ]
+}
+
+
+@dataclass(frozen=True)
+class UploadSpec:
+    job_id: str
+    transfer_kind: str
+    mod_id: Any
+    storage_type: str
+    file_kind: str
+    pack_format: str
+    pack_level: int
+    callback_payload: dict[str, Any]
+    max_bytes: Optional[int]
+    safe_name: str
+    upload_rel: str
+    upload_abs: str
+
+
+@dataclass(frozen=True)
+class UploadStreamResult:
+    downloaded: int
+    final_total: int
 
 
 def configure_context_provider(provider: Callable[[], ServiceContext]) -> None:
@@ -27,6 +87,14 @@ def _ctx() -> ServiceContext:
     if _context_provider is None:
         raise RuntimeError("transfer context provider is not configured")
     return _context_provider()
+
+
+def _client_host(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _error_response(status_code: int, content: str) -> PlainTextResponse:
+    return PlainTextResponse(status_code=status_code, content=content)
 
 
 async def _extract_token(request: Request) -> Optional[str]:
@@ -60,19 +128,33 @@ def _parse_non_negative_int(value: Any) -> Optional[int]:
     return parsed
 
 
-async def _update_meta_fields(
-    ctx: ServiceContext,
-    job_id: str,
-    updates: dict[str, Any],
-    *,
-    warning_message: str = "failed to update meta for job_id=%s",
-) -> None:
+def _extract_bearer_token(request: Request) -> Optional[str]:
+    token = request.query_params.get("token")
+    if token:
+        return token
+    auth = request.headers.get("Authorization") or ""
+    if auth.startswith("Bearer "):
+        return auth.split(" ", 1)[1].strip()
+    return None
+
+
+def _parse_pack_level(raw_value: Any, default: int = 3) -> int:
     try:
-        meta = await anyio.to_thread.run_sync(ctx.read_meta_sync, job_id)
-        meta.update(updates)
-        await anyio.to_thread.run_sync(ctx.write_meta_sync, job_id, meta)
-    except Exception:
-        ctx.logger.warning(warning_message, job_id)
+        level = int(raw_value)
+    except (TypeError, ValueError):
+        level = default
+    return max(0, min(level, 9))
+
+
+def _read_upload_size_hint(request: Request) -> Optional[int]:
+    total = _parse_non_negative_int(request.headers.get("content-length"))
+    if total is None:
+        total = _parse_non_negative_int(request.query_params.get("size"))
+    if total is None:
+        total = _parse_non_negative_int(
+            request.headers.get("X-File-Size") or request.headers.get("X-Upload-Size")
+        )
+    return total
 
 
 def _remove_if_exists(ctx: ServiceContext, path: str, warning_template: str, job_id: str) -> None:
@@ -83,83 +165,367 @@ def _remove_if_exists(ctx: ServiceContext, path: str, warning_template: str, job
         ctx.logger.warning(warning_template, job_id)
 
 
-@router.get(
+def _build_upload_spec(
+    ctx: ServiceContext,
+    request: Request,
+    payload: dict[str, Any],
+) -> UploadSpec | PlainTextResponse:
+    job_id = str(payload.get("job_id", ""))
+    if not ctx.tools.is_safe_job_id(job_id):
+        return _error_response(400, "Invalid job id")
+
+    transfer_kind = str(payload.get("transfer_kind") or "archive").strip().lower()
+    if transfer_kind not in {"archive", "img"}:
+        return _error_response(400, "Unsupported transfer kind")
+
+    callback_context = payload.get("callback_context")
+    if not isinstance(callback_context, dict):
+        callback_context = {}
+    callback_payload: dict[str, Any] = {
+        "transfer_kind": transfer_kind,
+        "callback_action": payload.get("callback_action"),
+        "callback_context": callback_context,
+        "target_path": payload.get("target_path"),
+    }
+
+    mod_id = None
+    pack_format = "zip"
+    pack_level = 3
+    storage_type = ""
+    file_kind = ""
+
+    if transfer_kind == "archive":
+        pack_format = payload.get("pack_format", "zip")
+        if pack_format != "zip":
+            return _error_response(400, "Unsupported format")
+        pack_level = _parse_pack_level(payload.get("pack_level", 3))
+        mod_id = payload.get("mod_id")
+        callback_payload.update(
+            {
+                "mod_id": mod_id,
+                "pack_format": pack_format,
+                "pack_level": pack_level,
+                "update_only": bool(payload.get("update_only") or payload.get("keep_condition")),
+            }
+        )
+    else:
+        storage_type = str(payload.get("storage_type") or "").strip().lower()
+        if not ctx.tools.is_allowed_upload_type(storage_type):
+            return _error_response(400, "Invalid storage type")
+        file_kind = ctx.tools.normalize_file_kind(payload.get("file_kind"), default="")
+        if file_kind != "img":
+            return _error_response(400, "Invalid file kind")
+        callback_payload.update({"storage_type": storage_type, "file_kind": file_kind})
+
+    safe_name = ctx.tools.sanitize_filename(
+        request.query_params.get("filename") or request.headers.get("X-File-Name"),
+        default="upload.zip" if transfer_kind == "archive" else "upload.img",
+    )
+    upload_rel = os.path.join("temp", job_id, safe_name)
+
+    return UploadSpec(
+        job_id=job_id,
+        transfer_kind=transfer_kind,
+        mod_id=mod_id,
+        storage_type=storage_type,
+        file_kind=file_kind,
+        pack_format=pack_format,
+        pack_level=pack_level,
+        callback_payload=callback_payload,
+        max_bytes=_coerce_max_bytes(
+            payload.get("max_bytes", None),
+            getattr(ctx.config, "TRANSFER_MAX_BYTES", None),
+        ),
+        safe_name=safe_name,
+        upload_rel=upload_rel,
+        upload_abs=ctx.tools.safe_path(ctx.main_dir, upload_rel),
+    )
+
+
+async def _notify_upload_error(ctx: ServiceContext, spec: UploadSpec, reason: str) -> None:
+    await ctx.notify_manager(
+        {
+            **spec.callback_payload,
+            "job_id": spec.job_id,
+            "status": "error",
+            "reason": reason,
+        }
+    )
+
+
+async def _authorize_manage_request(
+    ctx: ServiceContext,
+    *,
+    token: str,
+    client: str,
+    action: str,
+    job_id: str,
+) -> Optional[PlainTextResponse]:
+    if not token:
+        ctx.logger.warning("transfer %s denied (token missing) job_id=%s client=%s", action, job_id, client)
+        return _error_response(401, "Token not found")
+    if not await anyio.to_thread.run_sync(ctx.tools.check_token, "storage_manage_token", token):
+        ctx.logger.warning("transfer %s denied (token) job_id=%s client=%s", action, job_id, client)
+        return _error_response(403, "Access denied")
+    return None
+
+
+async def _read_job_meta(ctx: ServiceContext, job_id: str) -> Optional[dict[str, Any]]:
+    try:
+        return await anyio.to_thread.run_sync(ctx.read_meta_sync, job_id)
+    except Exception:
+        return None
+
+
+async def _initialize_upload_job(
+    ctx: ServiceContext,
+    spec: UploadSpec,
+    total: Optional[int],
+) -> None:
+    async with ctx.job_lock:
+        state = ctx.job_state.get(spec.job_id)
+        if not state:
+            state = ctx.new_job_state()
+            ctx.job_state[spec.job_id] = state
+        reset_job_state(
+            state,
+            started=True,
+            status="uploading",
+            stage="uploading",
+            total=total,
+        )
+
+    meta = {
+        "job_id": spec.job_id,
+        "mod_id": spec.mod_id,
+        "transfer_kind": spec.transfer_kind,
+        "storage_type": spec.storage_type,
+        "file_kind": spec.file_kind,
+        "filename": spec.safe_name,
+        "download_path": spec.upload_rel,
+        "pack_format": spec.pack_format,
+        "pack_level": spec.pack_level,
+        "status": "uploading",
+        "created_at": int(time.time()),
+    }
+    await anyio.to_thread.run_sync(ctx.write_meta_sync, spec.job_id, meta)
+    await ctx.set_stage(spec.job_id, "uploading")
+
+
+def _log_upload_progress(
+    ctx: ServiceContext,
+    job_id: str,
+    downloaded: int,
+    total: Optional[int],
+    last_log_bytes: int,
+    next_percent: int,
+) -> tuple[int, int]:
+    if total:
+        percent = int((downloaded / total) * 100)
+        while percent >= next_percent:
+            ctx.logger.info(
+                "transfer upload progress job_id=%s percent=%s bytes=%s",
+                job_id,
+                next_percent,
+                downloaded,
+            )
+            next_percent += 10
+    elif downloaded - last_log_bytes >= 50 * 1024 * 1024:
+        last_log_bytes = downloaded
+        ctx.logger.info(
+            "transfer upload progress job_id=%s bytes=%s",
+            job_id,
+            downloaded,
+        )
+    return last_log_bytes, next_percent
+
+
+async def _stream_upload_body(
+    ctx: ServiceContext,
+    request: Request,
+    spec: UploadSpec,
+    total: Optional[int],
+) -> UploadStreamResult | PlainTextResponse:
+    downloaded = 0
+    last_push = 0.0
+    last_log_bytes = 0
+    next_percent = 10
+
+    os.makedirs(os.path.dirname(spec.upload_abs), exist_ok=True)
+    with open(spec.upload_abs, "wb") as out_file:
+        async for chunk in request.stream():
+            if not chunk:
+                continue
+            downloaded += len(chunk)
+            if spec.max_bytes and downloaded > spec.max_bytes:
+                await ctx.set_state(spec.job_id, status="error", error="size_limit")
+                await ctx.broadcast(
+                    spec.job_id,
+                    await ctx.build_state_event(spec.job_id, "error", message="file too large"),
+                )
+                _remove_if_exists(
+                    ctx,
+                    spec.upload_abs,
+                    "failed to cleanup partial file job_id=%s",
+                    spec.job_id,
+                )
+                await _notify_upload_error(ctx, spec, "size_limit")
+                await ctx.job_error_cleanup(spec.job_id, "size_limit")
+                return _error_response(413, "File too large")
+
+            await anyio.to_thread.run_sync(out_file.write, chunk)
+            now = time.monotonic()
+            if now - last_push >= ctx.progress_push_interval:
+                last_push = now
+                await ctx.set_state(spec.job_id, bytes=downloaded)
+                await ctx.broadcast(spec.job_id, await ctx.build_state_event(spec.job_id, "progress"))
+            last_log_bytes, next_percent = _log_upload_progress(
+                ctx,
+                spec.job_id,
+                downloaded,
+                total,
+                last_log_bytes,
+                next_percent,
+            )
+
+    final_total = total if total is not None else downloaded
+    await ctx.set_state(spec.job_id, bytes=downloaded, total=final_total)
+    await ctx.broadcast(spec.job_id, await ctx.build_state_event(spec.job_id, "progress"))
+    await ctx.set_state(spec.job_id, status="done", bytes=downloaded, total=final_total)
+    await update_job_meta(
+        ctx,
+        spec.job_id,
+        {
+            "status": "uploaded",
+            "downloaded_bytes": downloaded,
+            "total_bytes": final_total,
+            "upload_completed_at": int(time.time()),
+        },
+    )
+    return UploadStreamResult(downloaded=downloaded, final_total=final_total)
+
+
+async def _process_archive_upload(
+    ctx: ServiceContext,
+    spec: UploadSpec,
+) -> tuple[Optional[int], Optional[PlainTextResponse]]:
+    _, is_encrypted, _ = await anyio.to_thread.run_sync(ctx.tools.probe_archive, spec.upload_abs)
+    if is_encrypted:
+        await ctx.set_state(spec.job_id, status="error", error="encrypted_zip")
+        await ctx.broadcast(
+            spec.job_id,
+            await ctx.build_state_event(spec.job_id, "error", message="zip encrypted"),
+        )
+        await update_job_meta(
+            ctx,
+            spec.job_id,
+            {"status": "error", "error_reason": "encrypted_zip"},
+        )
+        _remove_if_exists(
+            ctx,
+            spec.upload_abs,
+            "failed to cleanup encrypted zip job_id=%s",
+            spec.job_id,
+        )
+        await _notify_upload_error(ctx, spec, "encrypted_zip")
+        await ctx.job_error_cleanup(spec.job_id, "encrypted_zip")
+        return None, _error_response(400, "Encrypted zip not allowed")
+
+    await ctx.set_stage(spec.job_id, "uploaded")
+    repack_ok, _, _, unpacked_bytes, repack_reason = await ctx.run_repack_job(
+        spec.job_id,
+        spec.upload_abs,
+        spec.pack_format,
+        spec.pack_level,
+    )
+    if repack_ok:
+        return unpacked_bytes, None
+
+    await _notify_upload_error(ctx, spec, repack_reason or "repack_failed")
+    if repack_reason == "encrypted_zip":
+        return None, _error_response(400, "Encrypted zip not allowed")
+    return None, _error_response(500, "Repack failed")
+
+
+async def _process_image_upload(
+    ctx: ServiceContext,
+    spec: UploadSpec,
+) -> Optional[PlainTextResponse]:
+    await ctx.set_stage(spec.job_id, "processing")
+    packed_rel = os.path.join("temp", spec.job_id, "packed.webp")
+    packed_abs = ctx.tools.safe_path(ctx.main_dir, packed_rel)
+
+    try:
+        await anyio.to_thread.run_sync(ctx.tools.image_file_to_webp, spec.upload_abs, packed_abs)
+    except ValueError:
+        await ctx.set_state(spec.job_id, status="error", error="not_image")
+        await ctx.broadcast(
+            spec.job_id,
+            await ctx.build_state_event(spec.job_id, "error", message="image expected"),
+        )
+        await update_job_meta(
+            ctx,
+            spec.job_id,
+            {"status": "error", "error_reason": "not_image"},
+        )
+        _remove_if_exists(
+            ctx,
+            spec.upload_abs,
+            "failed to cleanup invalid image job_id=%s",
+            spec.job_id,
+        )
+        await _notify_upload_error(ctx, spec, "not_image")
+        await ctx.job_error_cleanup(spec.job_id, "not_image")
+        return _error_response(400, "Image expected")
+    except Exception:
+        ctx.logger.exception("transfer image preparation failed job_id=%s", spec.job_id)
+        _remove_if_exists(
+            ctx,
+            spec.upload_abs,
+            "failed to cleanup image prep files job_id=%s",
+            spec.job_id,
+        )
+        _remove_if_exists(
+            ctx,
+            packed_abs,
+            "failed to cleanup image prep files job_id=%s",
+            spec.job_id,
+        )
+        await _notify_upload_error(ctx, spec, "image_prepare_failed")
+        await ctx.job_error_cleanup(spec.job_id, "image_prepare_failed")
+        return _error_response(500, "Image preparation failed")
+
+    _remove_if_exists(
+        ctx,
+        spec.upload_abs,
+        "failed to cleanup source upload file job_id=%s",
+        spec.job_id,
+    )
+
+    packed_bytes = os.path.getsize(packed_abs)
+    await update_job_meta(
+        ctx,
+        spec.job_id,
+        {
+            "packed_path": packed_rel,
+            "packed_bytes": packed_bytes,
+            "status": "packed",
+            "packed_format": "webp",
+        },
+        warning_message="failed to update image meta for job_id=%s",
+    )
+    await ctx.set_stage(spec.job_id, "packed")
+    return None
+
+
+@router.api_route(
     "/transfer/start",
+    methods=["GET", "POST"],
     tags=["Transfer"],
     summary="Start transfer from URL",
-    description=(
-        "Starts a background download from the URL embedded in the transfer JWT. "
-        "JWT must contain: job_id, mod_id (optional), download_url, pack_format, pack_level. "
-        "Token can be passed as query param `token` or form field `token` for POST. "
-        "Returns job_id and WebSocket URL for progress updates."
-    ),
-    responses={
-        200: {
-            "description": "Transfer started",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "job_id": "3f2c1b7a0c9f4c7c8e5f1a2b3c4d5e6f",
-                        "status": "started",
-                        "ws_url": "/transfer/ws/3f2c1b7a0c9f4c7c8e5f1a2b3c4d5e6f",
-                    }
-                }
-            },
-        },
-        400: {"description": "Invalid request", "content": {"text/plain": {"example": "Invalid job id"}}},
-        401: {"description": "Token not found", "content": {"text/plain": {"example": "Token not found"}}},
-        403: {"description": "Access denied", "content": {"text/plain": {"example": "Access denied"}}},
-    },
-    openapi_extra={
-        "parameters": [
-            {
-                "name": "token",
-                "in": "query",
-                "required": False,
-                "schema": {"type": "string"},
-                "description": "Transfer JWT (can also be sent in form body for POST).",
-            }
-        ]
-    },
-)
-@router.post(
-    "/transfer/start",
-    tags=["Transfer"],
-    summary="Start transfer from URL",
-    description=(
-        "Starts a background download from the URL embedded in the transfer JWT. "
-        "JWT must contain: job_id, mod_id (optional), download_url, pack_format, pack_level. "
-        "Token can be passed as query param `token` or form field `token` for POST. "
-        "Returns job_id and WebSocket URL for progress updates."
-    ),
-    responses={
-        200: {
-            "description": "Transfer started",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "job_id": "3f2c1b7a0c9f4c7c8e5f1a2b3c4d5e6f",
-                        "status": "started",
-                        "ws_url": "/transfer/ws/3f2c1b7a0c9f4c7c8e5f1a2b3c4d5e6f",
-                    }
-                }
-            },
-        },
-        400: {"description": "Invalid request", "content": {"text/plain": {"example": "Invalid job id"}}},
-        401: {"description": "Token not found", "content": {"text/plain": {"example": "Token not found"}}},
-        403: {"description": "Access denied", "content": {"text/plain": {"example": "Access denied"}}},
-    },
-    openapi_extra={
-        "parameters": [
-            {
-                "name": "token",
-                "in": "query",
-                "required": False,
-                "schema": {"type": "string"},
-                "description": "Transfer JWT (can also be sent in form body for POST).",
-            }
-        ]
-    },
+    description=TRANSFER_START_DESCRIPTION,
+    responses=TRANSFER_START_RESPONSES,
+    openapi_extra=TRANSFER_START_OPENAPI_EXTRA,
 )
 async def transfer_start(request: Request):
     ctx = _ctx()
@@ -212,17 +578,11 @@ async def transfer_start(request: Request):
         if not state:
             state = ctx.new_job_state()
             ctx.job_state[job_id] = state
-        state.update(
-            {
-                "started": True,
-                "status": "pending",
-                "stage": "pending",
-                "bytes": 0,
-                "total": None,
-                "percent": None,
-                "error": None,
-                "last_activity": time.time(),
-            }
+        reset_job_state(
+            state,
+            started=True,
+            status="pending",
+            stage="pending",
         )
 
     meta = {
@@ -325,390 +685,101 @@ async def transfer_start(request: Request):
 )
 async def transfer_upload(request: Request):
     ctx = _ctx()
-    client = request.client.host if request.client else "unknown"
-    token = request.query_params.get("token")
-    if not token:
-        auth = request.headers.get("Authorization") or ""
-        if auth.startswith("Bearer "):
-            token = auth.split(" ", 1)[1].strip()
+    client = _client_host(request)
+    token = _extract_bearer_token(request)
     if not token:
         ctx.logger.warning("transfer upload denied (token missing) client=%s", client)
-        return PlainTextResponse(status_code=401, content="Token not found")
+        return _error_response(401, "Token not found")
 
     payload = ctx.tools.decode_transfer_jwt(token, audience="storage")
     if not payload:
         ctx.logger.warning("transfer upload denied (token) client=%s", client)
-        return PlainTextResponse(status_code=403, content="Access denied")
+        return _error_response(403, "Access denied")
 
-    job_id = str(payload.get("job_id", ""))
-    if not ctx.tools.is_safe_job_id(job_id):
-        return PlainTextResponse(status_code=400, content="Invalid job id")
+    spec = _build_upload_spec(ctx, request, payload)
+    if isinstance(spec, PlainTextResponse):
+        return spec
 
-    transfer_kind = str(payload.get("transfer_kind") or "archive").strip().lower()
-    if transfer_kind not in {"archive", "img"}:
-        return PlainTextResponse(status_code=400, content="Unsupported transfer kind")
-
-    callback_context = payload.get("callback_context")
-    if not isinstance(callback_context, dict):
-        callback_context = {}
-    callback_payload: dict[str, Any] = {
-        "transfer_kind": transfer_kind,
-        "callback_action": payload.get("callback_action"),
-        "callback_context": callback_context,
-        "target_path": payload.get("target_path"),
-    }
-
-    mod_id = None
-    pack_format = "zip"
-    pack_level = 3
-    storage_type = ""
-    file_kind = ""
-
-    if transfer_kind == "archive":
-        pack_format = payload.get("pack_format", "zip")
-        if pack_format != "zip":
-            return PlainTextResponse(status_code=400, content="Unsupported format")
-
-        try:
-            pack_level = int(payload.get("pack_level", 3))
-        except (TypeError, ValueError):
-            pack_level = 3
-        pack_level = max(0, min(pack_level, 9))
-        mod_id = payload.get("mod_id")
-        update_only = bool(payload.get("update_only") or payload.get("keep_condition"))
-        callback_payload.update(
-            {
-                "mod_id": mod_id,
-                "pack_format": pack_format,
-                "pack_level": pack_level,
-                "update_only": update_only,
-            }
-        )
-    else:
-        storage_type = str(payload.get("storage_type") or "").strip().lower()
-        if not ctx.tools.is_allowed_upload_type(storage_type):
-            return PlainTextResponse(status_code=400, content="Invalid storage type")
-        file_kind = ctx.tools.normalize_file_kind(payload.get("file_kind"), default="")
-        if file_kind != "img":
-            return PlainTextResponse(status_code=400, content="Invalid file kind")
-        callback_payload.update({"storage_type": storage_type, "file_kind": file_kind})
-
-    max_bytes = _coerce_max_bytes(
-        payload.get("max_bytes", None),
-        getattr(ctx.config, "TRANSFER_MAX_BYTES", None),
-    )
-
-    filename = request.query_params.get("filename") or request.headers.get("X-File-Name")
-    safe_name = ctx.tools.sanitize_filename(
-        filename,
-        default="upload.zip" if transfer_kind == "archive" else "upload.img",
-    )
-    upload_rel = os.path.join("temp", job_id, safe_name)
-    upload_abs = ctx.tools.safe_path(ctx.main_dir, upload_rel)
-
-    total = _parse_non_negative_int(request.headers.get("content-length"))
-    if total is None:
-        total = _parse_non_negative_int(request.query_params.get("size"))
-    if total is None:
-        total = _parse_non_negative_int(
-            request.headers.get("X-File-Size") or request.headers.get("X-Upload-Size")
-        )
+    total = _read_upload_size_hint(request)
     ctx.logger.info(
         "transfer upload start job_id=%s kind=%s mod_id=%s storage_type=%s filename=%s size_hint=%s client=%s",
-        job_id,
-        transfer_kind,
-        mod_id,
-        storage_type,
-        safe_name,
+        spec.job_id,
+        spec.transfer_kind,
+        spec.mod_id,
+        spec.storage_type,
+        spec.safe_name,
         total,
         client,
     )
 
-    async with ctx.job_lock:
-        state = ctx.job_state.get(job_id)
-        if not state:
-            state = ctx.new_job_state()
-            ctx.job_state[job_id] = state
-        state.update(
-            {
-                "started": True,
-                "status": "uploading",
-                "stage": "uploading",
-                "bytes": 0,
-                "total": total,
-                "percent": None,
-                "error": None,
-                "last_activity": time.time(),
-            }
-        )
-
-    meta = {
-        "job_id": job_id,
-        "mod_id": mod_id,
-        "transfer_kind": transfer_kind,
-        "storage_type": storage_type,
-        "file_kind": file_kind,
-        "filename": safe_name,
-        "download_path": upload_rel,
-        "pack_format": pack_format,
-        "pack_level": pack_level,
-        "status": "uploading",
-        "created_at": int(time.time()),
-    }
-    await anyio.to_thread.run_sync(ctx.write_meta_sync, job_id, meta)
-
-    await ctx.set_stage(job_id, "uploading")
-
-    downloaded = 0
-    last_push = 0.0
+    await _initialize_upload_job(ctx, spec, total)
     start_ts = time.monotonic()
-    last_log_bytes = 0
-    next_percent = 10
 
     try:
-        os.makedirs(os.path.dirname(upload_abs), exist_ok=True)
-        with open(upload_abs, "wb") as out_file:
-            async for chunk in request.stream():
-                if not chunk:
-                    continue
-                downloaded += len(chunk)
-                if max_bytes and downloaded > max_bytes:
-                    await ctx.set_state(job_id, status="error", error="size_limit")
-                    await ctx.broadcast(
-                        job_id,
-                        await ctx.build_state_event(job_id, "error", message="file too large"),
-                    )
-                    _remove_if_exists(
-                        ctx,
-                        upload_abs,
-                        "failed to cleanup partial file job_id=%s",
-                        job_id,
-                    )
-                    await ctx.notify_manager(
-                        {
-                            **callback_payload,
-                            "job_id": job_id,
-                            "status": "error",
-                            "reason": "size_limit",
-                        }
-                    )
-                    await ctx.job_error_cleanup(job_id, "size_limit")
-                    return PlainTextResponse(status_code=413, content="File too large")
-
-                await anyio.to_thread.run_sync(out_file.write, chunk)
-                now = time.monotonic()
-                if now - last_push >= ctx.progress_push_interval:
-                    last_push = now
-                    await ctx.set_state(job_id, bytes=downloaded)
-                    await ctx.broadcast(job_id, await ctx.build_state_event(job_id, "progress"))
-                if total:
-                    percent = int((downloaded / total) * 100)
-                    if percent >= next_percent:
-                        ctx.logger.info(
-                            "transfer upload progress job_id=%s percent=%s bytes=%s",
-                            job_id,
-                            percent,
-                            downloaded,
-                        )
-                        next_percent += 10
-                elif downloaded - last_log_bytes >= 50 * 1024 * 1024:
-                    last_log_bytes = downloaded
-                    ctx.logger.info(
-                        "transfer upload progress job_id=%s bytes=%s",
-                        job_id,
-                        downloaded,
-                    )
-
-        final_total = total if total is not None else downloaded
-        await ctx.set_state(job_id, bytes=downloaded, total=final_total)
-        await ctx.broadcast(job_id, await ctx.build_state_event(job_id, "progress"))
-        await ctx.set_state(job_id, status="done", bytes=downloaded, total=final_total)
-        await _update_meta_fields(
-            ctx,
-            job_id,
-            {
-                "status": "uploaded",
-                "downloaded_bytes": downloaded,
-                "total_bytes": final_total,
-                "upload_completed_at": int(time.time()),
-            },
-        )
-
+        stream_result = await _stream_upload_body(ctx, request, spec, total)
+        if isinstance(stream_result, PlainTextResponse):
+            return stream_result
         duration = time.monotonic() - start_ts
         ctx.logger.info(
             "transfer upload done job_id=%s bytes=%s duration=%.2fs",
-            job_id,
-            downloaded,
+            spec.job_id,
+            stream_result.downloaded,
             duration,
         )
 
         unpacked_bytes = None
-        if transfer_kind == "archive":
-            _, is_encrypted, _ = await anyio.to_thread.run_sync(ctx.tools.probe_archive, upload_abs)
-            if is_encrypted:
-                await ctx.set_state(job_id, status="error", error="encrypted_zip")
-                await ctx.broadcast(
-                    job_id,
-                    await ctx.build_state_event(job_id, "error", message="zip encrypted"),
-                )
-                await _update_meta_fields(
-                    ctx,
-                    job_id,
-                    {"status": "error", "error_reason": "encrypted_zip"},
-                )
-                _remove_if_exists(
-                    ctx,
-                    upload_abs,
-                    "failed to cleanup encrypted zip job_id=%s",
-                    job_id,
-                )
-                await ctx.notify_manager(
-                    {
-                        **callback_payload,
-                        "job_id": job_id,
-                        "status": "error",
-                        "reason": "encrypted_zip",
-                    }
-                )
-                await ctx.job_error_cleanup(job_id, "encrypted_zip")
-                return PlainTextResponse(status_code=400, content="Encrypted zip not allowed")
-
-            await ctx.set_stage(job_id, "uploaded")
-
-            repack_ok, _, _, unpacked_bytes, repack_reason = await ctx.run_repack_job(
-                job_id,
-                upload_abs,
-                pack_format,
-                pack_level,
-            )
-            if not repack_ok:
-                await ctx.notify_manager(
-                    {
-                        **callback_payload,
-                        "job_id": job_id,
-                        "status": "error",
-                        "reason": repack_reason or "repack_failed",
-                    }
-                )
-                if repack_reason == "encrypted_zip":
-                    return PlainTextResponse(status_code=400, content="Encrypted zip not allowed")
-                return PlainTextResponse(status_code=500, content="Repack failed")
+        if spec.transfer_kind == "archive":
+            unpacked_bytes, archive_error = await _process_archive_upload(ctx, spec)
+            if archive_error is not None:
+                return archive_error
         else:
-            await ctx.set_stage(job_id, "processing")
-            packed_rel = os.path.join("temp", job_id, "packed.webp")
-            packed_abs = ctx.tools.safe_path(ctx.main_dir, packed_rel)
-            try:
-                await anyio.to_thread.run_sync(ctx.tools.image_file_to_webp, upload_abs, packed_abs)
-            except ValueError:
-                await ctx.set_state(job_id, status="error", error="not_image")
-                await ctx.broadcast(
-                    job_id,
-                    await ctx.build_state_event(job_id, "error", message="image expected"),
-                )
-                await _update_meta_fields(
-                    ctx,
-                    job_id,
-                    {"status": "error", "error_reason": "not_image"},
-                )
-                _remove_if_exists(
-                    ctx,
-                    upload_abs,
-                    "failed to cleanup invalid image job_id=%s",
-                    job_id,
-                )
-                await ctx.notify_manager(
-                    {
-                        **callback_payload,
-                        "job_id": job_id,
-                        "status": "error",
-                        "reason": "not_image",
-                    }
-                )
-                await ctx.job_error_cleanup(job_id, "not_image")
-                return PlainTextResponse(status_code=400, content="Image expected")
-            except Exception:
-                ctx.logger.exception("transfer image preparation failed job_id=%s", job_id)
-                _remove_if_exists(
-                    ctx,
-                    upload_abs,
-                    "failed to cleanup image prep files job_id=%s",
-                    job_id,
-                )
-                _remove_if_exists(
-                    ctx,
-                    packed_abs,
-                    "failed to cleanup image prep files job_id=%s",
-                    job_id,
-                )
-                await ctx.notify_manager(
-                    {
-                        **callback_payload,
-                        "job_id": job_id,
-                        "status": "error",
-                        "reason": "image_prepare_failed",
-                    }
-                )
-                await ctx.job_error_cleanup(job_id, "image_prepare_failed")
-                return PlainTextResponse(status_code=500, content="Image preparation failed")
+            image_error = await _process_image_upload(ctx, spec)
+            if image_error is not None:
+                return image_error
 
-            _remove_if_exists(
-                ctx,
-                upload_abs,
-                "failed to cleanup source upload file job_id=%s",
-                job_id,
-            )
-
-            packed_bytes = os.path.getsize(packed_abs)
-            await _update_meta_fields(
-                ctx,
-                job_id,
-                {
-                    "packed_path": packed_rel,
-                    "packed_bytes": packed_bytes,
-                    "status": "packed",
-                    "packed_format": "webp",
-                },
-                warning_message="failed to update image meta for job_id=%s",
-            )
-            await ctx.set_stage(job_id, "packed")
-
-        await ctx.broadcast(job_id, await ctx.build_state_event(job_id, "complete"))
+        await ctx.broadcast(spec.job_id, await ctx.build_state_event(spec.job_id, "complete"))
         callback_success_payload = {
-            **callback_payload,
-            "job_id": job_id,
+            **spec.callback_payload,
+            "job_id": spec.job_id,
             "status": "success",
-            "bytes": downloaded,
-            "total": final_total,
-            "packed_format": "zip" if transfer_kind == "archive" else "webp",
+            "bytes": stream_result.downloaded,
+            "total": stream_result.final_total,
+            "packed_format": "zip" if spec.transfer_kind == "archive" else "webp",
         }
-        if transfer_kind == "archive" and unpacked_bytes is not None:
+        if spec.transfer_kind == "archive" and unpacked_bytes is not None:
             callback_success_payload["unpacked_bytes"] = unpacked_bytes
         await ctx.notify_manager(callback_success_payload)
         return {
-            "job_id": job_id,
-            "bytes": downloaded,
-            "total": final_total,
+            "job_id": spec.job_id,
+            "bytes": stream_result.downloaded,
+            "total": stream_result.final_total,
         }
     except Exception as exc:
-        ctx.logger.exception("transfer upload failed job_id=%s", job_id)
-        _remove_if_exists(ctx, upload_abs, "failed to cleanup partial file job_id=%s", job_id)
-        await _update_meta_fields(
+        ctx.logger.exception("transfer upload failed job_id=%s", spec.job_id)
+        _remove_if_exists(
             ctx,
-            job_id,
+            spec.upload_abs,
+            "failed to cleanup partial file job_id=%s",
+            spec.job_id,
+        )
+        await update_job_meta(
+            ctx,
+            spec.job_id,
             {
                 "status": "error",
                 "error": str(exc),
                 "upload_completed_at": int(time.time()),
             },
         )
-        await ctx.set_state(job_id, status="error", error=str(exc))
-        await ctx.broadcast(job_id, await ctx.build_state_event(job_id, "error", message="upload failed"))
-        await ctx.notify_manager(
-            {**callback_payload, "job_id": job_id, "status": "error", "reason": "exception"}
+        await ctx.set_state(spec.job_id, status="error", error=str(exc))
+        await ctx.broadcast(
+            spec.job_id,
+            await ctx.build_state_event(spec.job_id, "error", message="upload failed"),
         )
-        return PlainTextResponse(status_code=500, content="Upload failed")
+        await _notify_upload_error(ctx, spec, "exception")
+        return _error_response(500, "Upload failed")
     finally:
-        await ctx.close_clients(job_id)
+        await ctx.close_clients(spec.job_id)
 
 
 @router.websocket("/transfer/ws/{job_id}")
@@ -737,14 +808,7 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
             state["clients"] = clients
         if websocket not in clients:
             clients.append(websocket)
-        snapshot = {
-            "event": "progress",
-            "bytes": state.get("bytes", 0),
-            "total": state.get("total"),
-            "status": state.get("status"),
-            "stage": state.get("stage"),
-            "percent": state.get("percent"),
-        }
+        snapshot = state_event_payload("progress", state)
     if snapshot is not None:
         try:
             await websocket.send_json(snapshot)
@@ -800,57 +864,55 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
 async def transfer_repack(
     request: Request,
     job_id: str = Form(),
-    format: str = Form("zip"),
+    pack_format: str = Form("zip", alias="format"),
     compression_level: int = Form(3),
     token: str = Form(),
 ):
     ctx = _ctx()
-    client = request.client.host if request.client else "unknown"
-    if not token:
-        ctx.logger.warning("transfer repack denied (token missing) job_id=%s client=%s", job_id, client)
-        return PlainTextResponse(status_code=401, content="Token not found")
-    if not await anyio.to_thread.run_sync(ctx.tools.check_token, "storage_manage_token", token):
-        ctx.logger.warning("transfer repack denied (token) job_id=%s client=%s", job_id, client)
-        return PlainTextResponse(status_code=403, content="Access denied")
+    client = _client_host(request)
+    auth_error = await _authorize_manage_request(
+        ctx,
+        token=token,
+        client=client,
+        action="repack",
+        job_id=job_id,
+    )
+    if auth_error is not None:
+        return auth_error
     if not ctx.tools.is_safe_job_id(job_id):
-        return PlainTextResponse(status_code=400, content="Invalid job id")
+        return _error_response(400, "Invalid job id")
 
-    try:
-        meta = await anyio.to_thread.run_sync(ctx.read_meta_sync, job_id)
-    except Exception:
-        return PlainTextResponse(status_code=404, content="Job not found")
+    meta = await _read_job_meta(ctx, job_id)
+    if meta is None:
+        return _error_response(404, "Job not found")
 
-    if format != "zip":
-        return PlainTextResponse(status_code=400, content="Unsupported format")
+    if pack_format != "zip":
+        return _error_response(400, "Unsupported format")
 
     download_rel = meta.get("download_path")
     if not download_rel:
-        return PlainTextResponse(status_code=404, content="Source file not found")
+        return _error_response(404, "Source file not found")
 
     download_abs = ctx.tools.safe_path(ctx.main_dir, download_rel)
-    try:
-        compression_level = int(compression_level)
-    except (TypeError, ValueError):
-        compression_level = 3
-    compression_level = max(0, min(compression_level, 9))
+    compression_level = _parse_pack_level(compression_level)
 
     ctx.logger.info(
         "transfer repack start job_id=%s format=%s level=%s client=%s",
         job_id,
-        format,
+        pack_format,
         compression_level,
         client,
     )
     repack_ok, packed_rel, packed_bytes, unpacked_bytes, repack_reason = await ctx.run_repack_job(
         job_id,
         download_abs,
-        format,
+        pack_format,
         compression_level,
     )
     if not repack_ok:
         if repack_reason == "encrypted_zip":
-            return PlainTextResponse(status_code=400, content="Encrypted zip not allowed")
-        return PlainTextResponse(status_code=500, content="Repack failed")
+            return _error_response(400, "Encrypted zip not allowed")
+        return _error_response(500, "Repack failed")
 
     return {
         "job_id": job_id,
@@ -891,44 +953,46 @@ async def transfer_repack(
 async def transfer_move(
     request: Request,
     job_id: str = Form(),
-    type: str = Form(),
-    path: str = Form(),
+    storage_type: str = Form(alias="type"),
+    target_path: str = Form(alias="path"),
     token: str = Form(),
 ):
     ctx = _ctx()
-    client = request.client.host if request.client else "unknown"
-    if not token:
-        ctx.logger.warning("transfer move denied (token missing) job_id=%s client=%s", job_id, client)
-        return PlainTextResponse(status_code=401, content="Token not found")
-    if not await anyio.to_thread.run_sync(ctx.tools.check_token, "storage_manage_token", token):
-        ctx.logger.warning("transfer move denied (token) job_id=%s client=%s", job_id, client)
-        return PlainTextResponse(status_code=403, content="Access denied")
+    client = _client_host(request)
+    auth_error = await _authorize_manage_request(
+        ctx,
+        token=token,
+        client=client,
+        action="move",
+        job_id=job_id,
+    )
+    if auth_error is not None:
+        return auth_error
     if not ctx.tools.is_safe_job_id(job_id):
-        return PlainTextResponse(status_code=400, content="Invalid job id")
-    if not ctx.tools.is_allowed_type(type):
-        return PlainTextResponse(status_code=400, content="Invalid type")
+        return _error_response(400, "Invalid job id")
+    if not ctx.tools.is_allowed_type(storage_type):
+        return _error_response(400, "Invalid type")
 
-    try:
-        meta = await anyio.to_thread.run_sync(ctx.read_meta_sync, job_id)
-    except Exception:
-        return PlainTextResponse(status_code=404, content="Job not found")
+    meta = await _read_job_meta(ctx, job_id)
+    if meta is None:
+        return _error_response(404, "Job not found")
 
     packed_rel = meta.get("packed_path")
     if not packed_rel:
-        return PlainTextResponse(status_code=404, content="Packed file not found")
+        return _error_response(404, "Packed file not found")
 
     packed_abs = ctx.tools.safe_path(ctx.main_dir, packed_rel)
-    base_dir = os.path.join(ctx.main_dir, type)
+    base_dir = os.path.join(ctx.main_dir, storage_type)
     try:
-        real_path = ctx.tools.safe_path(base_dir, path)
+        real_path = ctx.tools.safe_path(base_dir, target_path)
     except ValueError:
-        return PlainTextResponse(status_code=423, content="Access denied")
+        return _error_response(423, "Access denied")
 
     ctx.logger.info(
         "transfer move start job_id=%s type=%s path=%s client=%s",
         job_id,
-        type,
-        path,
+        storage_type,
+        target_path,
         client,
     )
     start_ts = time.monotonic()

@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 
 from storage_service.context import ServiceContext
+from storage_service.job_state import new_job_state, state_event_payload
 from storage_service.file_routes import (
     configure_context_provider as configure_file_routes,
     delete,
@@ -45,17 +46,7 @@ PROGRESS_PUSH_INTERVAL = 0.25
 
 
 def _new_job_state() -> dict[str, Any]:
-    return {
-        "started": False,
-        "status": "pending",
-        "stage": "pending",
-        "bytes": 0,
-        "total": None,
-        "percent": None,
-        "error": None,
-        "clients": [],
-        "last_activity": time.time(),
-    }
+    return new_job_state()
 
 
 @asynccontextmanager
@@ -115,18 +106,7 @@ def _state_event_payload(
     state: dict[str, Any],
     **extra: Any,
 ) -> dict[str, Any]:
-    payload = {
-        "event": event,
-        "bytes": state.get("bytes", 0),
-        "total": state.get("total"),
-        "status": state.get("status"),
-        "stage": state.get("stage"),
-    }
-    percent = state.get("percent")
-    if percent is not None or event == "progress":
-        payload["percent"] = percent
-    payload.update(extra)
-    return payload
+    return state_event_payload(event, state, **extra)
 
 
 async def _build_state_event(job_id: str, event: str, **extra: Any) -> dict[str, Any]:

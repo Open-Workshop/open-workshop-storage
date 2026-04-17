@@ -26,6 +26,14 @@ def _ctx() -> ServiceContext:
     return _context_provider()
 
 
+def _client_host(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _error_response(status_code: int, content: str) -> PlainTextResponse:
+    return PlainTextResponse(status_code=status_code, content=content)
+
+
 @router.api_route(
     "/download/{type}/{path:path}",
     methods=["GET", "HEAD"],
@@ -189,60 +197,64 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
 async def upload(
     request: Request,
     file: UploadFile = File(),
-    type: str = Form(),
-    path: str = Form(),
+    storage_type: str = Form(alias="type"),
+    storage_path: str = Form(alias="path"),
     file_kind: str = Form("bin"),
     token: str = Form(),
 ):
     ctx = _ctx()
-    client = request.client.host if request.client else "unknown"
+    client = _client_host(request)
     ctx.logger.info(
         "upload request type=%s path=%s file_kind=%s filename=%s client=%s",
-        type,
-        path,
+        storage_type,
+        storage_path,
         file_kind,
         file.filename,
         client,
     )
     if not token:
-        ctx.logger.warning("upload denied (token missing) type=%s path=%s client=%s", type, path, client)
-        return PlainTextResponse(status_code=401, content="Token not found")
+        ctx.logger.warning(
+            "upload denied (token missing) type=%s path=%s client=%s",
+            storage_type,
+            storage_path,
+            client,
+        )
+        return _error_response(401, "Token not found")
     if not await anyio.to_thread.run_sync(ctx.tools.check_token, "upload_file", token):
-        ctx.logger.warning("upload denied (token) type=%s path=%s client=%s", type, path, client)
-        return PlainTextResponse(status_code=403, content="Access denied")
-    if not ctx.tools.is_allowed_upload_type(type):
-        ctx.logger.warning("upload invalid type=%s path=%s client=%s", type, path, client)
-        return PlainTextResponse(status_code=400, content="Invalid type")
+        ctx.logger.warning("upload denied (token) type=%s path=%s client=%s", storage_type, storage_path, client)
+        return _error_response(403, "Access denied")
+    if not ctx.tools.is_allowed_upload_type(storage_type):
+        ctx.logger.warning("upload invalid type=%s path=%s client=%s", storage_type, storage_path, client)
+        return _error_response(400, "Invalid type")
     normalized_file_kind = ctx.tools.normalize_file_kind(file_kind, default="")
     if not normalized_file_kind:
         ctx.logger.warning(
             "upload invalid file_kind=%s type=%s path=%s client=%s",
             file_kind,
-            type,
-            path,
+            storage_type,
+            storage_path,
             client,
         )
-        return PlainTextResponse(status_code=400, content="Invalid file kind")
-    if type == "avatar" and normalized_file_kind != "img":
-        return PlainTextResponse(status_code=400, content="Avatar requires image file kind")
+        return _error_response(400, "Invalid file kind")
+    if storage_type == "avatar" and normalized_file_kind != "img":
+        return _error_response(400, "Avatar requires image file kind")
 
-    base_dir = os.path.join(ctx.main_dir, type)
+    base_dir = os.path.join(ctx.main_dir, storage_type)
     try:
-        real_path = ctx.tools.safe_path(base_dir, path)
+        real_path = ctx.tools.safe_path(base_dir, storage_path)
     except ValueError:
-        ctx.logger.warning("upload path traversal type=%s path=%s client=%s", type, path, client)
-        return PlainTextResponse(status_code=423, content="Access denied")
-    if not os.path.exists(os.path.dirname(real_path)):
-        os.makedirs(os.path.dirname(real_path))
+        ctx.logger.warning("upload path traversal type=%s path=%s client=%s", storage_type, storage_path, client)
+        return _error_response(423, "Access denied")
+    os.makedirs(os.path.dirname(real_path), exist_ok=True)
 
     if normalized_file_kind == "img":
-        if not path.lower().endswith(".webp"):
-            return PlainTextResponse(status_code=400, content="Image storage path must end with .webp")
+        if not storage_path.lower().endswith(".webp"):
+            return _error_response(400, "Image storage path must end with .webp")
         raw_bytes = await file.read()
         try:
             webp_bytes = await anyio.to_thread.run_sync(ctx.tools.image_bytes_to_webp, raw_bytes)
         except ValueError:
-            return PlainTextResponse(status_code=400, content="Image expected")
+            return _error_response(400, "Image expected")
 
         def _write_bytes_sync() -> None:
             with open(real_path, "wb") as out_file:
@@ -253,12 +265,12 @@ async def upload(
         await anyio.to_thread.run_sync(ctx.tools.copy_fileobj_to_path, file.file, real_path)
     ctx.logger.info(
         "upload saved type=%s path=%s file_kind=%s client=%s",
-        type,
-        path,
+        storage_type,
+        storage_path,
         normalized_file_kind,
         client,
     )
-    return path
+    return storage_path
 
 
 @router.delete(
@@ -295,31 +307,36 @@ async def upload(
         },
     },
 )
-async def delete(request: Request, type: str = Form(), path: str = Form(), token: str = Form()):
+async def delete(
+    request: Request,
+    storage_type: str = Form(alias="type"),
+    storage_path: str = Form(alias="path"),
+    token: str = Form(),
+):
     ctx = _ctx()
-    client = request.client.host if request.client else "unknown"
-    ctx.logger.info("delete request type=%s path=%s client=%s", type, path, client)
+    client = _client_host(request)
+    ctx.logger.info("delete request type=%s path=%s client=%s", storage_type, storage_path, client)
     if not token:
-        ctx.logger.warning("delete denied (token missing) type=%s path=%s client=%s", type, path, client)
-        return PlainTextResponse(status_code=401, content="Token not found")
+        ctx.logger.warning("delete denied (token missing) type=%s path=%s client=%s", storage_type, storage_path, client)
+        return _error_response(401, "Token not found")
     if not await anyio.to_thread.run_sync(ctx.tools.check_token, "delete_file", token):
-        ctx.logger.warning("delete denied (token) type=%s path=%s client=%s", type, path, client)
-        return PlainTextResponse(status_code=403, content="Access denied")
-    if not ctx.tools.is_allowed_type(type):
-        ctx.logger.warning("delete invalid type=%s path=%s client=%s", type, path, client)
-        return PlainTextResponse(status_code=400, content="Invalid type")
+        ctx.logger.warning("delete denied (token) type=%s path=%s client=%s", storage_type, storage_path, client)
+        return _error_response(403, "Access denied")
+    if not ctx.tools.is_allowed_type(storage_type):
+        ctx.logger.warning("delete invalid type=%s path=%s client=%s", storage_type, storage_path, client)
+        return _error_response(400, "Invalid type")
 
-    base_dir = os.path.join(ctx.main_dir, type)
+    base_dir = os.path.join(ctx.main_dir, storage_type)
     try:
-        real_path = ctx.tools.safe_path(base_dir, path)
+        real_path = ctx.tools.safe_path(base_dir, storage_path)
     except ValueError:
-        ctx.logger.warning("delete path traversal type=%s path=%s client=%s", type, path, client)
-        return PlainTextResponse(status_code=403, content="Access denied")
+        ctx.logger.warning("delete path traversal type=%s path=%s client=%s", storage_type, storage_path, client)
+        return _error_response(403, "Access denied")
 
     def delete_file_and_parent_folders(file_path: str, root_dir: str):
         if not os.path.isfile(file_path):
-            ctx.logger.info("delete not found type=%s path=%s client=%s", type, path, client)
-            return PlainTextResponse(status_code=404, content="File not found")
+            ctx.logger.info("delete not found type=%s path=%s client=%s", storage_type, storage_path, client)
+            return _error_response(404, "File not found")
         os.remove(file_path)
         folder_path = os.path.dirname(file_path)
         root_dir = os.path.abspath(root_dir)
@@ -334,7 +351,7 @@ async def delete(request: Request, type: str = Form(), path: str = Form(), token
             else:
                 break
 
-        ctx.logger.info("delete ok type=%s path=%s client=%s", type, path, client)
-        return PlainTextResponse(status_code=200, content="File deleted")
+        ctx.logger.info("delete ok type=%s path=%s client=%s", storage_type, storage_path, client)
+        return _error_response(200, "File deleted")
 
     return await anyio.to_thread.run_sync(delete_file_and_parent_folders, real_path, base_dir)
