@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Callable, Optional
 
@@ -116,49 +117,59 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
                 )
         return response
 
-    if type == "archive" and path.startswith("mod/"):
+    if type == "archive" and path.startswith("mods/"):
         parts = path.split("/", 2)
         if len(parts) < 2:
-            ctx.logger.info("download not found (bad mod path) type=%s path=%s client=%s", type, path, client)
-            return PlainTextResponse(status_code=404, content="File not found")
+            ctx.logger.info("download not found (bad mod id) type=%s path=%s client=%s", type, path, client)
+            return _error_response(404, "File not found")
         try:
             mod_id = int(parts[1])
         except ValueError:
             ctx.logger.info("download not found (bad mod id) type=%s path=%s client=%s", type, path, client)
-            return PlainTextResponse(status_code=404, content="File not found")
-        async with aiohttp.ClientSession() as session:
-            user = request.cookies.get("userID", 0)
-            headers = {"x-token": f"{ctx.config.check_access}"}
-            async with session.get(
-                f"{ctx.manager_url}/mods/access/[{mod_id}]?user={user}",
-                headers=headers,
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if mod_id in data:
-                        ctx.logger.info(
-                            "download allowed mod_id=%s type=%s path=%s client=%s",
+            return _error_response(404, "File not found")
+        try:
+            async with aiohttp.ClientSession() as session:
+                user = request.cookies.get("userID", 0)
+                headers = {"x-token": f"{ctx.config.check_access}"}
+                async with session.get(
+                    f"{ctx.manager_url}/mods/access/[{mod_id}]?user={user}",
+                    headers=headers,
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if mod_id in data:
+                            ctx.logger.info(
+                                "download allowed mod_id=%s type=%s path=%s client=%s",
+                                mod_id,
+                                type,
+                                path,
+                                client,
+                            )
+                            return await file_response_with_meta()
+                        ctx.logger.warning(
+                            "download denied mod_id=%s type=%s path=%s client=%s",
                             mod_id,
                             type,
                             path,
                             client,
                         )
-                        return await file_response_with_meta()
+                        return _error_response(403, "Access denied")
                     ctx.logger.warning(
-                        "download denied mod_id=%s type=%s path=%s client=%s",
+                        "manager unavailable status=%s mod_id=%s client=%s",
+                        resp.status,
                         mod_id,
-                        type,
-                        path,
                         client,
                     )
-                    return PlainTextResponse(status_code=403, content="Access denied")
-                ctx.logger.warning(
-                    "manager unavailable status=%s mod_id=%s client=%s",
-                    resp.status,
-                    mod_id,
-                    client,
-                )
-                return PlainTextResponse(status_code=503, content="Manager unavailable")
+                    return _error_response(503, "Manager unavailable")
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            ctx.logger.warning(
+                "manager unavailable network error mod_id=%s type=%s path=%s client=%s",
+                mod_id,
+                type,
+                path,
+                client,
+            )
+            return _error_response(503, "Manager unavailable")
 
     ctx.logger.info("download ok type=%s path=%s client=%s", type, path, client)
     return await file_response_with_meta()

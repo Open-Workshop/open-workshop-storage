@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from types import ModuleType
 
 from fastapi.testclient import TestClient
+import aiohttp
 
 
 def _load_main_module(temp_dir: str):
@@ -17,6 +18,7 @@ def _load_main_module(temp_dir: str):
     config.TRANSFER_JWT_SECRET = "test-secret-with-safe-length-32+"
     config.TRANSFER_CALLBACK_TTL_SECONDS = 600
     config.TRANSFER_MAX_BYTES = 0
+    config.check_access = "test-manager-token"
 
     sys.modules["ow_config"] = config
     sys.modules.pop("tools", None)
@@ -113,6 +115,36 @@ class TransferStartTests(unittest.TestCase):
                     self.assertFalse(called.wait(0.2))
             finally:
                 main._run_download_job = original
+
+    def test_download_mod_returns_503_when_manager_is_unreachable(self):
+        with TemporaryDirectory() as temp_dir:
+            main = _load_main_module(temp_dir)
+            archive_path = Path(main.MAIN_DIR) / "archive" / "mods" / "123" / "main.zip"
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            archive_path.write_bytes(b"archive")
+
+            import storage_service.file_routes as file_routes
+
+            class FailingSession:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    return False
+
+                def get(self, *args, **kwargs):
+                    raise aiohttp.ClientError("manager offline")
+
+            original_session = file_routes.aiohttp.ClientSession
+            file_routes.aiohttp.ClientSession = FailingSession
+            try:
+                with TestClient(main.app) as client:
+                    response = client.get("/download/archive/mods/123/main.zip")
+            finally:
+                file_routes.aiohttp.ClientSession = original_session
+
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.text, "Manager unavailable")
 
 
 if __name__ == "__main__":

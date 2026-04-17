@@ -69,6 +69,28 @@ class ZipHeuristicsTests(unittest.TestCase):
 
         self.assertFalse(tools.zip_uses_deflated_or_better("unused.zip", entries))
 
+    def test_probe_archive_uses_facade_ensure_7z_available_override(self):
+        tools = _load_tools_module()
+        import storage_service.archive_tools as archive_tools
+
+        original_run = archive_tools.subprocess.run
+        original_ensure = tools.ensure_7z_available
+
+        def fail_run(*args, **kwargs):
+            raise AssertionError("subprocess.run should not be called when facade override fails first")
+
+        def fake_ensure():
+            raise RuntimeError("patched ensure")
+
+        archive_tools.subprocess.run = fail_run
+        tools.ensure_7z_available = fake_ensure
+        try:
+            with self.assertRaisesRegex(RuntimeError, "patched ensure"):
+                tools.probe_archive("unused.zip")
+        finally:
+            archive_tools.subprocess.run = original_run
+            tools.ensure_7z_available = original_ensure
+
 
 if __name__ == "__main__":
     unittest.main()

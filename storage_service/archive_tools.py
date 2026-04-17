@@ -7,6 +7,7 @@ import re
 import select
 import shutil
 import subprocess
+import sys
 from typing import Any, Callable, Optional
 
 
@@ -20,8 +21,18 @@ def ensure_7z_available() -> None:
         raise RuntimeError("7z binary is required but not found in PATH")
 
 
+def _resolve_tools_export(name: str, fallback: Callable[..., Any]) -> Callable[..., Any]:
+    tools_module = sys.modules.get("tools")
+    if tools_module is None:
+        return fallback
+    override = getattr(tools_module, name, fallback)
+    if callable(override):
+        return override
+    return fallback
+
+
 def _run_7z(args: list[str], cwd: Optional[str] = None) -> subprocess.CompletedProcess:
-    ensure_7z_available()
+    _resolve_tools_export("ensure_7z_available", ensure_7z_available)()
     return subprocess.run(
         [SEVEN_ZIP_BIN, *args],
         cwd=cwd,
@@ -55,7 +66,7 @@ def _run_7z_with_progress(
     cwd: Optional[str] = None,
     on_progress: Optional[Callable[[int], None]] = None,
 ) -> subprocess.CompletedProcess:
-    ensure_7z_available()
+    _resolve_tools_export("ensure_7z_available", ensure_7z_available)()
     master_fd, slave_fd = pty.openpty()
     process = subprocess.Popen(
         [SEVEN_ZIP_BIN, *args],
@@ -271,8 +282,14 @@ def zip_uses_deflated_or_better(
             continue
         return False
 
-    unpacked_bytes = archive_entries_unpacked_bytes(entries)
-    packed_bytes = archive_entries_packed_bytes(entries)
+    unpacked_bytes = _resolve_tools_export(
+        "archive_entries_unpacked_bytes",
+        archive_entries_unpacked_bytes,
+    )(entries)
+    packed_bytes = _resolve_tools_export(
+        "archive_entries_packed_bytes",
+        archive_entries_packed_bytes,
+    )(entries)
     if unpacked_bytes is None or packed_bytes is None:
         return False
     if unpacked_bytes <= 0:
@@ -335,5 +352,9 @@ def safe_extract_archive(
     if archive_type in {"gzip", "bzip2", "xz"}:
         tar_path = _find_single_tar(dest_dir)
         if tar_path:
-            safe_extract_archive(tar_path, dest_dir, on_progress=on_progress)
+            _resolve_tools_export("safe_extract_archive", safe_extract_archive)(
+                tar_path,
+                dest_dir,
+                on_progress=on_progress,
+            )
             os.remove(tar_path)
