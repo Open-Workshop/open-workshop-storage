@@ -22,7 +22,7 @@ def ensure_7z_available() -> None:
 
 
 def _resolve_tools_export(name: str, fallback: Callable[..., Any]) -> Callable[..., Any]:
-    tools_module = sys.modules.get("tools")
+    tools_module = sys.modules.get("open_workshop_storage.utils")
     if tools_module is None:
         return fallback
     override = getattr(tools_module, name, fallback)

@@ -1,7 +1,19 @@
 import importlib
 import sys
 import unittest
+from pathlib import Path
 from types import ModuleType
+
+
+SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+
+def _clear_app_modules() -> None:
+    for module_name in list(sys.modules):
+        if module_name.startswith("open_workshop_storage"):
+            sys.modules.pop(module_name, None)
 
 
 def _load_tools_module():
@@ -20,8 +32,8 @@ def _load_tools_module():
     pil_module.Image = object
     pil_module.UnidentifiedImageError = RuntimeError
     sys.modules["PIL"] = pil_module
-    sys.modules.pop("tools", None)
-    return importlib.import_module("tools")
+    _clear_app_modules()
+    return importlib.import_module("open_workshop_storage.utils")
 
 
 class ZipHeuristicsTests(unittest.TestCase):
@@ -71,7 +83,7 @@ class ZipHeuristicsTests(unittest.TestCase):
 
     def test_probe_archive_uses_facade_ensure_7z_available_override(self):
         tools = _load_tools_module()
-        import storage_service.archive_tools as archive_tools
+        import open_workshop_storage.utils.archive as archive_tools
 
         original_run = archive_tools.subprocess.run
         original_ensure = tools.ensure_7z_available

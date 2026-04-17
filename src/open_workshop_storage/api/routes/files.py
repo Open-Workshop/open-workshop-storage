@@ -9,7 +9,7 @@ import anyio
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from .context import ServiceContext
+from ...core.context import ServiceContext
 
 
 router = APIRouter()

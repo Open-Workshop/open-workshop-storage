@@ -15,6 +15,16 @@ sudo apt install -y p7zip-full
 pip install -r requirements.txt
 ```
 
+## Project Layout
+
+Application code lives under `src/open_workshop_storage/`.
+
+- `api/routes/` contains FastAPI endpoints.
+- `services/` contains long-running job workflows.
+- `core/` contains shared application state and helpers.
+- `utils/` contains archive, auth, file, and image utilities.
+- `observability/` contains telemetry wiring.
+
 ## Transfer WebSocket
 
 Progress for `/transfer/start` and `/transfer/upload` jobs is available via
@@ -75,7 +85,7 @@ export OTEL_DEPLOYMENT_ENVIRONMENT="production"
 # export UPTRACE_OTLP_PROTOCOL="grpc"   # or "http"
 # export UPTRACE_FASTAPI_EXCLUDED_URLS="^.*/docs$,^.*/openapi\\.json$,^/favicon\\.ico$,^/robots\\.txt$"
 # export UPTRACE_FASTAPI_EXCLUDE_SPANS="receive,send"
-uvicorn main:app --host 127.0.0.1 --port 7070
+uvicorn --app-dir src open_workshop_storage.app:app --host 127.0.0.1 --port 7070
 ```
 
 Опционально можно переопределить OTLP endpoint:

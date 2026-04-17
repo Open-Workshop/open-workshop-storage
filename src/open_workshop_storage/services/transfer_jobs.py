@@ -9,9 +9,9 @@ from typing import Optional
 import aiohttp
 import anyio
 
-from .context import JsonDict, ServiceContext
-from .job_meta import update_job_meta
-from .job_state import state_event_payload
+from ..core.context import JsonDict, ServiceContext
+from ..core.job_meta import update_job_meta
+from ..core.job_state import state_event_payload
 
 
 async def run_cleanup(ctx: ServiceContext) -> None:

@@ -1,6 +1,6 @@
-"""Compatibility facade for storage utility helpers."""
+"""Utility facade for storage helper functions."""
 
-from storage_service.archive_tools import (
+from .archive import (
     archive_entries_packed_bytes,
     archive_entries_unpacked_bytes,
     ensure_7z_available,
@@ -9,13 +9,13 @@ from storage_service.archive_tools import (
     zip_dir_with_level,
     zip_uses_deflated_or_better,
 )
-from storage_service.auth_tools import (
+from .auth import (
     check_token,
     decode_transfer_jwt,
     encode_transfer_jwt,
     is_safe_job_id,
 )
-from storage_service.file_tools import (
+from .files import (
     build_download_filename,
     copy_fileobj_to_path,
     is_allowed_type,
@@ -24,7 +24,7 @@ from storage_service.file_tools import (
     safe_path,
     sanitize_filename,
 )
-from storage_service.image_tools import image_bytes_to_webp, image_file_to_webp
+from .images import image_bytes_to_webp, image_file_to_webp
 
 
 __all__ = [

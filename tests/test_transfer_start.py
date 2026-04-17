@@ -10,6 +10,17 @@ from fastapi.testclient import TestClient
 import aiohttp
 
 
+SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+
+def _clear_app_modules() -> None:
+    for module_name in list(sys.modules):
+        if module_name.startswith("open_workshop_storage"):
+            sys.modules.pop(module_name, None)
+
+
 def _load_main_module(temp_dir: str):
     config = ModuleType("ow_config")
     config.MAIN_DIR = str(Path(temp_dir) / "storage")
@@ -21,10 +32,9 @@ def _load_main_module(temp_dir: str):
     config.check_access = "test-manager-token"
 
     sys.modules["ow_config"] = config
-    sys.modules.pop("tools", None)
-    sys.modules.pop("main", None)
+    _clear_app_modules()
 
-    main = importlib.import_module("main")
+    main = importlib.import_module("open_workshop_storage.app")
     main.tools.ensure_7z_available = lambda: None
     return main
 
@@ -123,7 +133,7 @@ class TransferStartTests(unittest.TestCase):
             archive_path.parent.mkdir(parents=True, exist_ok=True)
             archive_path.write_bytes(b"archive")
 
-            import storage_service.file_routes as file_routes
+            import open_workshop_storage.api.routes.files as file_routes
 
             class FailingSession:
                 async def __aenter__(self):

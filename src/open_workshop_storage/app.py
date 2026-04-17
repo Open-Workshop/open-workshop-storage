@@ -8,22 +8,19 @@ import time
 from typing import Any
 
 import anyio
-import tools
 import ow_config as config
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 
-from storage_service.context import ServiceContext
-from storage_service.job_state import new_job_state, state_event_payload
-from storage_service.file_routes import (
+from . import utils as tools
+from .api.routes.files import (
     configure_context_provider as configure_file_routes,
     delete,
     download,
     router as file_router,
     upload,
 )
-from storage_service.transfer_jobs import cleanup_loop, notify_manager, run_cleanup, run_download_job, run_repack_job
-from storage_service.transfer_routes import (
+from .api.routes.transfers import (
     configure_context_provider as configure_transfer_routes,
     transfer_move,
     transfer_repack,
@@ -32,7 +29,10 @@ from storage_service.transfer_routes import (
     transfer_ws,
     router as transfer_router,
 )
-from telemetry import setup_uptrace_telemetry
+from .core.context import ServiceContext
+from .core.job_state import new_job_state, state_event_payload
+from .observability.uptrace import setup_uptrace_telemetry
+from .services.transfer_jobs import cleanup_loop, notify_manager, run_cleanup, run_download_job, run_repack_job
 
 
 MAIN_DIR = config.MAIN_DIR
