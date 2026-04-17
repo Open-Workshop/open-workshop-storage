@@ -15,6 +15,22 @@ sudo apt install -y p7zip-full
 pip install -r requirements.txt
 ```
 
+## Run Server
+
+Production-like start:
+
+```bash
+granian --working-dir src --interface asgi --host 0.0.0.0 --port 8000 --access-log open_workshop_storage.app:app
+```
+
+Local start:
+
+```bash
+granian --working-dir src --interface asgi --host 127.0.0.1 --port 8000 open_workshop_storage.app:app
+```
+
+The service is expected to run as a single worker process.
+
 ## Project Layout
 
 Application code lives under `src/open_workshop_storage/`.
@@ -85,7 +101,7 @@ export OTEL_DEPLOYMENT_ENVIRONMENT="production"
 # export UPTRACE_OTLP_PROTOCOL="grpc"   # or "http"
 # export UPTRACE_FASTAPI_EXCLUDED_URLS="^.*/docs$,^.*/openapi\\.json$,^/favicon\\.ico$,^/robots\\.txt$"
 # export UPTRACE_FASTAPI_EXCLUDE_SPANS="receive,send"
-uvicorn --app-dir src open_workshop_storage.app:app --host 127.0.0.1 --port 7070
+granian --working-dir src --interface asgi --host 127.0.0.1 --port 7070 open_workshop_storage.app:app
 ```
 
 Опционально можно переопределить OTLP endpoint:
