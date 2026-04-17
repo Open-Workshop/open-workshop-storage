@@ -1,10 +1,10 @@
 import asyncio
-from contextlib import asynccontextmanager, suppress
 import json
 import logging
 import os
 import shutil
 import time
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 import anyio
@@ -13,27 +13,14 @@ from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 
 from . import utils as tools
-from .api.routes.files import (
-    configure_context_provider as configure_file_routes,
-    delete,
-    download,
-    router as file_router,
-    upload,
-)
-from .api.routes.transfers import (
-    configure_context_provider as configure_transfer_routes,
-    transfer_move,
-    transfer_repack,
-    transfer_start,
-    transfer_upload,
-    transfer_ws,
-    router as transfer_router,
-)
+from .api.routes.files import configure_context_provider as configure_file_routes
+from .api.routes.files import router as file_router
+from .api.routes.transfers import configure_context_provider as configure_transfer_routes
+from .api.routes.transfers import router as transfer_router
 from .core.context import ServiceContext
 from .core.job_state import new_job_state, state_event_payload
 from .observability.uptrace import setup_uptrace_telemetry
 from .services.transfer_jobs import cleanup_loop, notify_manager, run_cleanup, run_download_job, run_repack_job
-
 
 MAIN_DIR = config.MAIN_DIR
 MANAGER_URL = config.MANAGER_URL

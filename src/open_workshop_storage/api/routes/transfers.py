@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import os
 import shutil
 import time
+from dataclasses import dataclass
 from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
@@ -16,7 +16,6 @@ from ...core.context import ServiceContext
 from ...core.job_meta import update_job_meta
 from ...core.job_state import reset_job_state, state_event_payload
 
-
 router = APIRouter()
 _context_provider: Optional[Callable[[], ServiceContext]] = None
 
@@ -26,7 +25,7 @@ TRANSFER_START_DESCRIPTION = (
     "Token can be passed as query param `token` or form field `token` for POST. "
     "Returns job_id and WebSocket URL for progress updates."
 )
-TRANSFER_START_RESPONSES = {
+TRANSFER_START_RESPONSES: dict[int | str, dict[str, Any]] = {
     200: {
         "description": "Transfer started",
         "content": {
@@ -43,7 +42,7 @@ TRANSFER_START_RESPONSES = {
     401: {"description": "Token not found", "content": {"text/plain": {"example": "Token not found"}}},
     403: {"description": "Access denied", "content": {"text/plain": {"example": "Access denied"}}},
 }
-TRANSFER_START_OPENAPI_EXTRA = {
+TRANSFER_START_OPENAPI_EXTRA: dict[str, Any] = {
     "parameters": [
         {
             "name": "token",
@@ -103,7 +102,8 @@ async def _extract_token(request: Request) -> Optional[str]:
         return token
     if request.method in ("POST", "PUT", "DELETE"):
         form = await request.form()
-        return form.get("token")
+        form_token = form.get("token")
+        return form_token if isinstance(form_token, str) else None
     return None
 
 

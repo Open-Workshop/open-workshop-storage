@@ -1,10 +1,10 @@
 .PHONY: type-check format lint
 
-PYTHON ?= python3
+PYTHON ?= $(if $(wildcard .venv/bin/python),./.venv/bin/python,python3)
 SRC_DIRS := src tests
 
 type-check:
-	MYPYPATH=src $(PYTHON) -m mypy $(SRC_DIRS)
+	$(PYTHON) -m mypy $(SRC_DIRS)
 
 format:
 	$(PYTHON) -m isort $(SRC_DIRS)

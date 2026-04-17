@@ -12,12 +12,12 @@ def image_bytes_to_webp(data: bytes, quality: int = 80) -> bytes:
             if img.mode in ("RGBA", "LA") or (
                 img.mode == "P" and "transparency" in img.info
             ):
-                img = img.convert("RGBA")
+                converted = img.convert("RGBA")
             else:
-                img = img.convert("RGB")
+                converted = img.convert("RGB")
 
             out = BytesIO()
-            img.save(out, format="WEBP", quality=quality, method=6)
+            converted.save(out, format="WEBP", quality=quality, method=6)
             return out.getvalue()
     except (UnidentifiedImageError, OSError) as exc:
         raise ValueError("not an image") from exc

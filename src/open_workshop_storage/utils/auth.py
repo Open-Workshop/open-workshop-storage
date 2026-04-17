@@ -8,7 +8,6 @@ import bcrypt
 import jwt
 import ow_config as config
 
-
 TRANSFER_JWT_ALG = "HS256"
 
 

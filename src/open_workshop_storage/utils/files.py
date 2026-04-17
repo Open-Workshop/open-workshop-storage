@@ -4,7 +4,6 @@ import os
 import shutil
 from typing import Any, Optional
 
-
 ALLOWED_FILENAME_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 ALLOWED_TYPES = {"archive", "resource", "avatar"}
 ALLOWED_UPLOAD_TYPES = {"resource", "avatar"}

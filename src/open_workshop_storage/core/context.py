@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Coroutine, Optional
 
 from fastapi import FastAPI
-
 
 JsonDict = dict[str, Any]
 JobState = dict[str, Any]
@@ -39,5 +38,8 @@ class ServiceContext:
         [str, str, str, int],
         Awaitable[tuple[bool, Optional[str], Optional[int], Optional[int], Optional[str]]],
     ]
-    run_download_job: Callable[[str, str, str, Optional[int], JsonDict], Awaitable[None]]
+    run_download_job: Callable[
+        [str, str, str, Optional[int], JsonDict],
+        Coroutine[Any, Any, None],
+    ]
     notify_manager: Callable[[JsonDict], Awaitable[None]]

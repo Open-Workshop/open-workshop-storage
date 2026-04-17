@@ -5,10 +5,10 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import ModuleType
+from typing import Any
 
-from fastapi.testclient import TestClient
 import aiohttp
-
+from fastapi.testclient import TestClient
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
@@ -22,7 +22,7 @@ def _clear_app_modules() -> None:
 
 
 def _load_main_module(temp_dir: str):
-    config = ModuleType("ow_config")
+    config: Any = ModuleType("ow_config")
     config.MAIN_DIR = str(Path(temp_dir) / "storage")
     config.MANAGER_URL = "http://127.0.0.1:8000/api/manager"
     config.MANAGER_TRANSFER_CALLBACK_URL = ""

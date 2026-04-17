@@ -11,7 +11,6 @@ from fastapi.responses import FileResponse, PlainTextResponse
 
 from ...core.context import ServiceContext
 
-
 router = APIRouter()
 _context_provider: Optional[Callable[[], ServiceContext]] = None
 
@@ -328,7 +327,12 @@ async def delete(
     client = _client_host(request)
     ctx.logger.info("delete request type=%s path=%s client=%s", storage_type, storage_path, client)
     if not token:
-        ctx.logger.warning("delete denied (token missing) type=%s path=%s client=%s", storage_type, storage_path, client)
+        ctx.logger.warning(
+            "delete denied (token missing) type=%s path=%s client=%s",
+            storage_type,
+            storage_path,
+            client,
+        )
         return _error_response(401, "Token not found")
     if not await anyio.to_thread.run_sync(ctx.tools.check_token, "delete_file", token):
         ctx.logger.warning("delete denied (token) type=%s path=%s client=%s", storage_type, storage_path, client)

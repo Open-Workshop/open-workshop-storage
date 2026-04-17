@@ -10,7 +10,6 @@ import subprocess
 import sys
 from typing import Any, Callable, Optional
 
-
 SEVEN_ZIP_BIN = "7z"
 SEVEN_ZIP_PROGRESS_RE = re.compile(r"(?<!\d)(100|[1-9]?\d)%")
 ZIP_MIN_COMPRESSION_SAVINGS_RATIO = 0.01
