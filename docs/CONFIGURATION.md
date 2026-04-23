@@ -21,7 +21,7 @@ cp ow_config_sample.py ow_config.py
 | `TRANSFER_JWT_SECRET` | yes | Shared secret for transfer JWT validation and Manager callback signing |
 | `TRANSFER_CALLBACK_TTL_SECONDS` | no | Lifetime of outgoing callback JWTs; default `600` |
 | `TRANSFER_MAX_BYTES` | no | Global maximum transfer size; `0` disables the limit |
-| `ACCESS_SERVICE_TIMEOUT_SECONDS` | no | Timeout for access-service download checks; default `30` |
+| `ACCESS_SERVICE_TIMEOUT_SECONDS` | yes | Timeout for access-service download checks |
 
 ## Cleanup Settings
 

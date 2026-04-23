@@ -64,7 +64,7 @@ async def resolve_mod_download_access(
     request: Request,
     mod_id: int,
     access_service_url: str,
-    timeout_seconds: int = 30,
+    timeout_seconds: int,
 ) -> ModDownloadAccessResult:
     url = access_service_url.rstrip("/") + f"/mod/{mod_id}"
     timeout = aiohttp.ClientTimeout(total=float(timeout_seconds))

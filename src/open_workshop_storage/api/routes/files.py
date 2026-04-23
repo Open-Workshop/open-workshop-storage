@@ -130,15 +130,8 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
             access_result = await access_client.resolve_mod_download_access(
                 request=request,
                 mod_id=mod_id,
-                access_service_url=getattr(
-                    ctx.config,
-                    "ACCESS_SERVICE_URL",
-                    "http://127.0.0.1:7777",
-                )
-                or "http://127.0.0.1:7777",
-                timeout_seconds=int(
-                    getattr(ctx.config, "ACCESS_SERVICE_TIMEOUT_SECONDS", 30) or 30
-                ),
+                access_service_url=ctx.config.ACCESS_SERVICE_URL,
+                timeout_seconds=int(ctx.config.ACCESS_SERVICE_TIMEOUT_SECONDS),
             )
             if access_result.allowed:
                 ctx.logger.info(
