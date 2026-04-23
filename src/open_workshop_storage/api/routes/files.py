@@ -129,7 +129,10 @@ async def download(request: Request, type: str, path: str, filename: Optional[st
         try:
             async with aiohttp.ClientSession() as session:
                 user = request.cookies.get("userID", 0)
-                headers = {"x-token": f"{ctx.config.check_access}"}
+                headers = {
+                    "Authorization": f"Bearer {ctx.config.check_access}",
+                    "x-token": f"{ctx.config.check_access}",
+                }
                 async with session.get(
                     f"{ctx.manager_url}/mods/access/[{mod_id}]?user={user}",
                     headers=headers,

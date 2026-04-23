@@ -156,6 +156,63 @@ class TransferStartTests(unittest.TestCase):
             self.assertEqual(response.status_code, 503)
             self.assertEqual(response.text, "Manager unavailable")
 
+    def test_download_mod_sends_bearer_token_to_manager(self):
+        with TemporaryDirectory() as temp_dir:
+            main = _load_main_module(temp_dir)
+            archive_path = Path(main.MAIN_DIR) / "archive" / "mods" / "123" / "main.zip"
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            archive_path.write_bytes(b"archive")
+
+            import open_workshop_storage.api.routes.files as file_routes
+
+            captured_request: dict[str, object] = {}
+
+            class FakeResponse:
+                status = 200
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    return False
+
+                async def json(self):
+                    return [123]
+
+            class FakeSession:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    return False
+
+                def get(self, url, **kwargs):
+                    captured_request["url"] = url
+                    captured_request["kwargs"] = kwargs
+                    return FakeResponse()
+
+            original_session = file_routes.aiohttp.ClientSession
+            file_routes.aiohttp.ClientSession = FakeSession
+            try:
+                with TestClient(main.app) as client:
+                    response = client.get(
+                        "/download/archive/mods/123/main.zip",
+                        cookies={"userID": "123"},
+                    )
+            finally:
+                file_routes.aiohttp.ClientSession = original_session
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.content, b"archive")
+            self.assertEqual(
+                captured_request["url"],
+                "http://127.0.0.1:8000/api/manager/mods/access/[123]?user=123",
+            )
+            headers = captured_request["kwargs"]["headers"]
+            self.assertIsInstance(headers, dict)
+            self.assertEqual(headers["Authorization"], "Bearer test-manager-token")
+            self.assertEqual(headers["x-token"], "test-manager-token")
+
 
 if __name__ == "__main__":
     unittest.main()
