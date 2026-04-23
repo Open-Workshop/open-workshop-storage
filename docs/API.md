@@ -18,6 +18,12 @@ These endpoints expect a plain token from the caller and validate it against con
 - `/transfer/repack` uses `storage_manage_token`
 - `/transfer/move` uses `storage_manage_token`
 
+### Access-service endpoints
+
+Protected archive downloads call the access service, which reads the request cookies and resolves mod rights:
+
+- `/download/{type}/{path:path}` for `archive/mods/...`
+
 ### Transfer JWT endpoints
 
 These endpoints expect a JWT signed with `TRANSFER_JWT_SECRET` and audience `storage`:
@@ -45,7 +51,8 @@ Download a stored file.
 
 ### Special behavior
 
-- for `archive/mods/...` downloads, access is validated through Manager
+- for `archive/mods/...` downloads, access is validated through the access service
+- when the access service denies a download, its human-readable reason is returned to the client
 - `HEAD` requests for mod archives may include `X-Unpacked-Bytes`
 
 ### Common responses
@@ -53,9 +60,10 @@ Download a stored file.
 - `200` file streamed successfully
 - `400` invalid storage type
 - `403` access denied by Manager
+- `403` access denied by the access service, with its reason text returned to the client
 - `404` file not found
 - `423` path traversal blocked
-- `503` Manager unavailable
+- `503` Access service unavailable
 
 ### `POST` `/upload`
 

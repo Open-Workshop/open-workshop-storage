@@ -25,11 +25,12 @@ def _load_main_module(temp_dir: str):
     config: Any = ModuleType("ow_config")
     config.MAIN_DIR = str(Path(temp_dir) / "storage")
     config.MANAGER_URL = "http://127.0.0.1:8000/api/manager"
+    config.ACCESS_SERVICE_URL = "http://127.0.0.1:8001/api/access"
+    config.ACCESS_SERVICE_TIMEOUT_SECONDS = 30
     config.MANAGER_TRANSFER_CALLBACK_URL = ""
     config.TRANSFER_JWT_SECRET = "test-secret-with-safe-length-32+"
     config.TRANSFER_CALLBACK_TTL_SECONDS = 600
     config.TRANSFER_MAX_BYTES = 0
-    config.check_access = "test-manager-token"
 
     sys.modules["ow_config"] = config
     _clear_app_modules()
@@ -126,44 +127,47 @@ class TransferStartTests(unittest.TestCase):
             finally:
                 main._run_download_job = original
 
-    def test_download_mod_returns_503_when_manager_is_unreachable(self):
+    def test_download_mod_returns_503_when_access_service_is_unreachable(self):
         with TemporaryDirectory() as temp_dir:
             main = _load_main_module(temp_dir)
             archive_path = Path(main.MAIN_DIR) / "archive" / "mods" / "123" / "main.zip"
             archive_path.parent.mkdir(parents=True, exist_ok=True)
             archive_path.write_bytes(b"archive")
 
-            import open_workshop_storage.api.routes.files as file_routes
+            import open_workshop_storage.services.access_client as access_client
 
             class FailingSession:
+                def __init__(self, *args, **kwargs):
+                    pass
+
                 async def __aenter__(self):
                     return self
 
                 async def __aexit__(self, exc_type, exc, tb):
                     return False
 
-                def get(self, *args, **kwargs):
-                    raise aiohttp.ClientError("manager offline")
+                def post(self, *args, **kwargs):
+                    raise aiohttp.ClientError("access service offline")
 
-            original_session = file_routes.aiohttp.ClientSession
-            file_routes.aiohttp.ClientSession = FailingSession
+            original_session = access_client.aiohttp.ClientSession
+            access_client.aiohttp.ClientSession = FailingSession
             try:
                 with TestClient(main.app) as client:
                     response = client.get("/download/archive/mods/123/main.zip")
             finally:
-                file_routes.aiohttp.ClientSession = original_session
+                access_client.aiohttp.ClientSession = original_session
 
             self.assertEqual(response.status_code, 503)
-            self.assertEqual(response.text, "Manager unavailable")
+            self.assertEqual(response.text, "Access service unavailable")
 
-    def test_download_mod_sends_bearer_token_to_manager(self):
+    def test_download_mod_queries_access_service(self):
         with TemporaryDirectory() as temp_dir:
             main = _load_main_module(temp_dir)
             archive_path = Path(main.MAIN_DIR) / "archive" / "mods" / "123" / "main.zip"
             archive_path.parent.mkdir(parents=True, exist_ok=True)
             archive_path.write_bytes(b"archive")
 
-            import open_workshop_storage.api.routes.files as file_routes
+            import open_workshop_storage.services.access_client as access_client
 
             captured_request: dict[str, object] = {}
 
@@ -177,41 +181,146 @@ class TransferStartTests(unittest.TestCase):
                     return False
 
                 async def json(self):
-                    return [123]
+                    return {
+                        "download": {"value": True, "reason": "allowed", "reason_code": "public"}
+                    }
 
             class FakeSession:
+                def __init__(self, *args, **kwargs):
+                    pass
+
                 async def __aenter__(self):
                     return self
 
                 async def __aexit__(self, exc_type, exc, tb):
                     return False
 
-                def get(self, url, **kwargs):
+                def post(self, url, **kwargs):
                     captured_request["url"] = url
                     captured_request["kwargs"] = kwargs
                     return FakeResponse()
 
-            original_session = file_routes.aiohttp.ClientSession
-            file_routes.aiohttp.ClientSession = FakeSession
+            original_session = access_client.aiohttp.ClientSession
+            access_client.aiohttp.ClientSession = FakeSession
             try:
                 with TestClient(main.app) as client:
                     response = client.get(
                         "/download/archive/mods/123/main.zip",
-                        cookies={"userID": "123"},
+                        cookies={
+                            "accessToken": "access-token",
+                            "refreshToken": "refresh-token",
+                            "userID": "123",
+                        },
                     )
             finally:
-                file_routes.aiohttp.ClientSession = original_session
+                access_client.aiohttp.ClientSession = original_session
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.content, b"archive")
             self.assertEqual(
                 captured_request["url"],
-                "http://127.0.0.1:8000/api/manager/mods/access/[123]?user=123",
+                "http://127.0.0.1:8001/api/access/mod/123",
             )
-            headers = captured_request["kwargs"]["headers"]
-            self.assertIsInstance(headers, dict)
-            self.assertEqual(headers["Authorization"], "Bearer test-manager-token")
-            self.assertEqual(headers["x-token"], "test-manager-token")
+            self.assertEqual(captured_request["kwargs"]["json"], {})
+            self.assertEqual(
+                captured_request["kwargs"]["cookies"],
+                {
+                    "accessToken": "access-token",
+                    "refreshToken": "refresh-token",
+                },
+            )
+
+    def test_download_mod_returns_403_when_access_is_denied(self):
+        with TemporaryDirectory() as temp_dir:
+            main = _load_main_module(temp_dir)
+            archive_path = Path(main.MAIN_DIR) / "archive" / "mods" / "123" / "main.zip"
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            archive_path.write_bytes(b"archive")
+
+            import open_workshop_storage.services.access_client as access_client
+
+            class DenyResponse:
+                status = 200
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    return False
+
+                async def json(self):
+                    return {
+                        "download": {"value": False, "reason": "denied", "reason_code": "hidden"}
+                    }
+
+            class DenySession:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    return False
+
+                def post(self, url, **kwargs):
+                    return DenyResponse()
+
+            original_session = access_client.aiohttp.ClientSession
+            access_client.aiohttp.ClientSession = DenySession
+            try:
+                with TestClient(main.app) as client:
+                    response = client.get("/download/archive/mods/123/main.zip")
+            finally:
+                access_client.aiohttp.ClientSession = original_session
+
+            self.assertEqual(response.status_code, 403)
+            self.assertEqual(response.text, "Access denied")
+
+    def test_download_mod_surfaces_access_service_error_message(self):
+        with TemporaryDirectory() as temp_dir:
+            main = _load_main_module(temp_dir)
+            archive_path = Path(main.MAIN_DIR) / "archive" / "mods" / "123" / "main.zip"
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            archive_path.write_bytes(b"archive")
+
+            import open_workshop_storage.services.access_client as access_client
+
+            class ErrorResponse:
+                status = 403
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    return False
+
+                async def text(self):
+                    return "У вас нет доступа к этому моду."
+
+            class ErrorSession:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    return False
+
+                def post(self, url, **kwargs):
+                    return ErrorResponse()
+
+            original_session = access_client.aiohttp.ClientSession
+            access_client.aiohttp.ClientSession = ErrorSession
+            try:
+                with TestClient(main.app) as client:
+                    response = client.get("/download/archive/mods/123/main.zip")
+            finally:
+                access_client.aiohttp.ClientSession = original_session
+
+            self.assertEqual(response.status_code, 403)
+            self.assertEqual(response.text, "У вас нет доступа к этому моду.")
 
 
 if __name__ == "__main__":

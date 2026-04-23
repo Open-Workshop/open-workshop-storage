@@ -17,14 +17,7 @@ def hash_token(token):
 def generate_token_pairs():
     """Генерация всех необходимых пар токенов"""
     tokens = {}
-    
-    # Отправляемые токены
-    check_access_token = generate_token()
-    tokens['check_access'] = {
-        'plain': check_access_token,
-        'hashed': hash_token(check_access_token)
-    }
-    
+
     # Принимаемые токены
     delete_file_token = generate_token()
     tokens['delete_file'] = {

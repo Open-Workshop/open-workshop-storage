@@ -15,11 +15,13 @@ cp ow_config_sample.py ow_config.py
 | Setting | Required | Description |
 | --- | --- | --- |
 | `MAIN_DIR` | yes | Root directory for permanent and temporary storage |
-| `MANAGER_URL` | yes | Base Manager API URL used for access checks and fallback transfer callback URL |
+| `MANAGER_URL` | yes | Base Manager API URL used for fallback transfer callback URL |
+| `ACCESS_SERVICE_URL` | yes | Base access service URL used for protected mod download checks |
 | `MANAGER_TRANSFER_CALLBACK_URL` | no | Explicit callback endpoint; if empty, fallback is `<MANAGER_URL>/storage/transfer/complete` |
 | `TRANSFER_JWT_SECRET` | yes | Shared secret for transfer JWT validation and Manager callback signing |
 | `TRANSFER_CALLBACK_TTL_SECONDS` | no | Lifetime of outgoing callback JWTs; default `600` |
 | `TRANSFER_MAX_BYTES` | no | Global maximum transfer size; `0` disables the limit |
+| `ACCESS_SERVICE_TIMEOUT_SECONDS` | no | Timeout for access-service download checks; default `30` |
 
 ## Cleanup Settings
 
@@ -32,7 +34,6 @@ cp ow_config_sample.py ow_config.py
 
 | Setting | Used by | Description |
 | --- | --- | --- |
-| `check_access` | storage -> Manager | Value forwarded as `x-token` during protected mod download access checks |
 | `delete_file` | Manager -> storage | Secret used by `/delete` |
 | `upload_file` | Manager -> storage | Secret used by `/upload` |
 | `storage_manage_token` | Manager -> storage | Secret used by `/transfer/repack` and `/transfer/move` |
@@ -40,9 +41,6 @@ cp ow_config_sample.py ow_config.py
 ### Important note
 
 Incoming form tokens are validated with bcrypt in the storage service.
-
-The `check_access` setting is different: the code forwards it to Manager as-is in the request header. Configure
-it in the format your Manager instance expects.
 
 ## Token Generation
 
@@ -97,15 +95,16 @@ sudo apt install -y p7zip-full
 ```python
 MAIN_DIR = "storage"
 MANAGER_URL = "http://127.0.0.1:8000/api/manager"
+ACCESS_SERVICE_URL = "http://127.0.0.1:7777"
 MANAGER_TRANSFER_CALLBACK_URL = ""
 TRANSFER_JWT_SECRET = "replace-me"
 TRANSFER_CALLBACK_TTL_SECONDS = 600
 TRANSFER_MAX_BYTES = 0
+ACCESS_SERVICE_TIMEOUT_SECONDS = 30
 
 CLEANUP_INTERVAL_SECONDS = 60
 JOB_TTL_SECONDS = 10800
 
-check_access = "replace-with-manager-shared-value"
 delete_file = "replace-with-bcrypt-hash"
 upload_file = "replace-with-bcrypt-hash"
 storage_manage_token = "replace-with-bcrypt-hash"

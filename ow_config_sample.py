@@ -1,10 +1,12 @@
 
 MAIN_DIR = 'storage'
 MANAGER_URL = 'http://127.0.0.1:8000/api/manager'
+ACCESS_SERVICE_URL = 'http://127.0.0.1:7777'
 MANAGER_TRANSFER_CALLBACK_URL = ''
 TRANSFER_JWT_SECRET = ''
 TRANSFER_CALLBACK_TTL_SECONDS = 600
 TRANSFER_MAX_BYTES = 0
+ACCESS_SERVICE_TIMEOUT_SECONDS = 30
 
 # Cleanup settings
 CLEANUP_INTERVAL_SECONDS = 60  # Интервал между проверками очистки
@@ -13,9 +15,6 @@ JOB_TTL_SECONDS = 10800  # Время неактивности перед уда
 # Токены
 
 ## Отправляемые
-check_access = ''
-
-## Принимаемые
 delete_file = ''
 upload_file = ''
 storage_manage_token = ''

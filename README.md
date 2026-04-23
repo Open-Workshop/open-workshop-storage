@@ -8,7 +8,7 @@
 
 Single-worker storage backend for Open Workshop.
 
-The service stores uploaded files, validates download access for protected archives, ingests transfer jobs
+The service stores uploaded files, validates download access for protected archives through the access service, ingests transfer jobs
 from external URLs or raw uploads, repacks archives to ZIP, converts images to WebP, streams progress over
 WebSocket, and reports completion back to Manager.
 
@@ -16,7 +16,7 @@ WebSocket, and reports completion back to Manager.
 
 - Single-worker runtime designed around in-memory job state.
 - FastAPI application served with Granian.
-- Protected archive downloads with Manager-side access validation.
+- Protected archive downloads with access-service validation.
 - Transfer pipeline for remote downloads and direct raw-body uploads.
 - Archive repacking with `7z`, encrypted ZIP rejection, and unpacked-size heuristics.
 - Automatic image normalization to WebP.
@@ -51,6 +51,7 @@ Then fill at least:
 
 - `MAIN_DIR`
 - `MANAGER_URL`
+- `ACCESS_SERVICE_URL`
 - `TRANSFER_JWT_SECRET`
 - token values in `ow_config.py`
 
@@ -95,7 +96,7 @@ current architecture because active transfer state lives in process memory.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` / `HEAD` | `/download/{type}/{path:path}` | Download stored files, with Manager validation for protected mod archives |
+| `GET` / `HEAD` | `/download/{type}/{path:path}` | Download stored files, with access-service validation for protected mod archives |
 | `POST` | `/upload` | Internal multipart upload endpoint for Manager |
 | `DELETE` | `/delete` | Internal delete endpoint for Manager |
 | `GET` / `POST` | `/transfer/start` | Start background download and repack flow from transfer JWT |
