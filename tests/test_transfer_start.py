@@ -181,9 +181,7 @@ class TransferStartTests(unittest.TestCase):
                     return False
 
                 async def json(self):
-                    return {
-                        "download": {"value": True, "reason": "allowed", "reason_code": "public"}
-                    }
+                    return {"download": {"value": True, "reason": "allowed", "reason_code": "public"}}
 
             class FakeSession:
                 def __init__(self, *args, **kwargs):
@@ -249,9 +247,7 @@ class TransferStartTests(unittest.TestCase):
                     return False
 
                 async def json(self):
-                    return {
-                        "download": {"value": False, "reason": "denied", "reason_code": "hidden"}
-                    }
+                    return {"download": {"value": False, "reason": "denied", "reason_code": "hidden"}}
 
             class DenySession:
                 def __init__(self, *args, **kwargs):
@@ -275,7 +271,7 @@ class TransferStartTests(unittest.TestCase):
                 access_client.aiohttp.ClientSession = original_session
 
             self.assertEqual(response.status_code, 403)
-            self.assertEqual(response.text, "Access denied")
+            self.assertEqual(response.text, "denied")
 
     def test_download_mod_surfaces_access_service_error_message(self):
         with TemporaryDirectory() as temp_dir:

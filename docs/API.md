@@ -271,6 +271,7 @@ Move the packed artifact from temp storage to permanent storage.
 
 - moves the packed file to the target storage root
 - records final path and size in metadata
+- clears the in-memory job state and closes any remaining websocket subscribers
 - removes the temp job directory afterwards
 
 ### Responses

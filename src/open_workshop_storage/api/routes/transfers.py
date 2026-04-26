@@ -4,6 +4,7 @@ import asyncio
 import os
 import shutil
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 from urllib.parse import urlparse
@@ -805,14 +806,9 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
         if websocket not in clients:
             clients.append(websocket)
         snapshot = state_event_payload("progress", state)
-    if snapshot is not None:
-        try:
-            await websocket.send_json(snapshot)
-        except Exception:
-            ctx.logger.exception("transfer ws initial send failed job_id=%s", job_id)
-            await websocket.close()
-            return
     try:
+        if snapshot is not None:
+            await websocket.send_json(snapshot)
         while True:
             message = await websocket.receive()
             if message.get("type") == "websocket.disconnect":
@@ -821,11 +817,15 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
         pass
     except Exception:
         ctx.logger.exception("transfer ws failed job_id=%s", job_id)
+        with suppress(Exception):
+            await websocket.close()
     finally:
         async with ctx.job_lock:
             state = ctx.job_state.get(job_id)
             if state and websocket in state.get("clients", []):
                 state["clients"].remove(websocket)
+            if state and not state.get("clients") and not state.get("started"):
+                ctx.job_state.pop(job_id, None)
         ctx.logger.info("transfer ws disconnect job_id=%s", job_id)
 
 
@@ -1006,11 +1006,7 @@ async def transfer_move(
         }
     )
     await anyio.to_thread.run_sync(ctx.write_meta_sync, job_id, meta)
-
-    try:
-        await anyio.to_thread.run_sync(shutil.rmtree, ctx.job_dir(job_id))
-    except Exception:
-        ctx.logger.warning("failed to cleanup temp dir job_id=%s", job_id)
+    await ctx.delete_job_and_dir(job_id)
 
     ctx.logger.info(
         "transfer move done job_id=%s final_bytes=%s duration=%.2fs",

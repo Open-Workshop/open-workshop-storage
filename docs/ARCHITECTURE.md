@@ -191,6 +191,7 @@ The cleanup loop runs every `CLEANUP_INTERVAL_SECONDS` seconds.
 
 It removes:
 
+- completed jobs from memory immediately after `POST /transfer/move` finalizes the transfer
 - inactive jobs from memory when their `last_activity` exceeds `JOB_TTL_SECONDS`
 - stale temp directories on disk that no longer have active in-memory state
 

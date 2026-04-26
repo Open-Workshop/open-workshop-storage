@@ -108,11 +108,20 @@ async def _broadcast(job_id: str, message: dict[str, Any]) -> None:
         if not state:
             return
         clients = list(state.get("clients", []))
+    dead_clients: list[Any] = []
     for ws in clients:
         try:
             await ws.send_json(message)
         except Exception:
-            pass
+            dead_clients.append(ws)
+            with suppress(Exception):
+                await ws.close()
+
+    if dead_clients:
+        async with JOB_LOCK:
+            state = JOB_STATE.get(job_id)
+            if state:
+                state["clients"] = [ws for ws in state.get("clients", []) if ws not in dead_clients]
 
 
 async def _close_clients(job_id: str) -> None:
