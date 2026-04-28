@@ -183,7 +183,7 @@ mod archive.
 After transfer success or failure, the service sends a JWT-signed callback to Manager. The callback target is:
 
 - `MANAGER_TRANSFER_CALLBACK_URL` if configured
-- otherwise `<MANAGER_URL>/storage/transfer/complete`
+- otherwise `<MANAGER_URL>/internal/storage/transfer-completions`
 
 ## Cleanup
 

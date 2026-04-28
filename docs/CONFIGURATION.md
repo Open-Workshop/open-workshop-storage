@@ -15,9 +15,9 @@ cp ow_config_sample.py ow_config.py
 | Setting | Required | Description |
 | --- | --- | --- |
 | `MAIN_DIR` | yes | Root directory for permanent and temporary storage |
-| `MANAGER_URL` | yes | Base Manager API URL used for fallback transfer callback URL |
+| `MANAGER_URL` | yes | Base Manager API URL used for fallback transfer callback URL, without a path suffix |
 | `ACCESS_SERVICE_URL` | yes | Base access service URL used for protected mod download checks |
-| `MANAGER_TRANSFER_CALLBACK_URL` | no | Explicit callback endpoint; if empty, fallback is `<MANAGER_URL>/storage/transfer/complete` |
+| `MANAGER_TRANSFER_CALLBACK_URL` | no | Explicit callback endpoint; if empty, fallback is `<MANAGER_URL>/internal/storage/transfer-completions` |
 | `TRANSFER_JWT_SECRET` | yes | Shared secret for transfer JWT validation and Manager callback signing |
 | `TRANSFER_CALLBACK_TTL_SECONDS` | no | Lifetime of outgoing callback JWTs; default `600` |
 | `TRANSFER_MAX_BYTES` | no | Global maximum transfer size; `0` disables the limit |
@@ -94,7 +94,7 @@ sudo apt install -y p7zip-full
 
 ```python
 MAIN_DIR = "storage"
-MANAGER_URL = "http://127.0.0.1:8000/api/manager"
+MANAGER_URL = "http://127.0.0.1:7776"
 ACCESS_SERVICE_URL = "http://127.0.0.1:7777"
 MANAGER_TRANSFER_CALLBACK_URL = ""
 TRANSFER_JWT_SECRET = "replace-me"

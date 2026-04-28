@@ -286,6 +286,8 @@ Move the packed artifact from temp storage to permanent storage.
 ## Manager Callback
 
 After transfer completion, the service sends a callback to Manager with a JWT in the `Authorization` header.
+If `MANAGER_TRANSFER_CALLBACK_URL` is not configured, the fallback target is
+`<MANAGER_URL>/internal/storage/transfer-completions`.
 
 Possible payload fields include:
 

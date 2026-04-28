@@ -18,7 +18,7 @@ def _clear_app_modules() -> None:
 def _load_tools_module():
     config = ModuleType("ow_config")
     config.MAIN_DIR = "/tmp/storage-tests"
-    config.MANAGER_URL = "http://127.0.0.1:8000/api/manager"
+    config.MANAGER_URL = "http://127.0.0.1:7776"
     config.MANAGER_TRANSFER_CALLBACK_URL = ""
     config.TRANSFER_JWT_SECRET = "test-secret-with-safe-length-32+"
     config.TRANSFER_CALLBACK_TTL_SECONDS = 600

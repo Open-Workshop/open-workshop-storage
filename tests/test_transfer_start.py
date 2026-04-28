@@ -24,8 +24,8 @@ def _clear_app_modules() -> None:
 def _load_main_module(temp_dir: str):
     config: Any = ModuleType("ow_config")
     config.MAIN_DIR = str(Path(temp_dir) / "storage")
-    config.MANAGER_URL = "http://127.0.0.1:8000/api/manager"
-    config.ACCESS_SERVICE_URL = "http://127.0.0.1:8001/api/access"
+    config.MANAGER_URL = "http://127.0.0.1:7776"
+    config.ACCESS_SERVICE_URL = "http://127.0.0.1:7777"
     config.ACCESS_SERVICE_TIMEOUT_SECONDS = 30
     config.MANAGER_TRANSFER_CALLBACK_URL = ""
     config.TRANSFER_JWT_SECRET = "test-secret-with-safe-length-32+"
@@ -217,7 +217,7 @@ class TransferStartTests(unittest.TestCase):
             self.assertEqual(response.content, b"archive")
             self.assertEqual(
                 captured_request["url"],
-                "http://127.0.0.1:8001/api/access/mod/123",
+                "http://127.0.0.1:7777/mod/123",
             )
             self.assertEqual(captured_request["kwargs"]["json"], {})
             self.assertEqual(

@@ -77,7 +77,7 @@ async def _broadcast_extract_progress(ctx: ServiceContext, job_id: str, percent:
 
 async def notify_manager(ctx: ServiceContext, payload: JsonDict) -> None:
     callback_url = getattr(ctx.config, "MANAGER_TRANSFER_CALLBACK_URL", None) or (
-        f"{ctx.manager_url}/storage/transfer/complete"
+        f"{ctx.manager_url}/internal/storage/transfer-completions"
     )
     ttl_raw = getattr(ctx.config, "TRANSFER_CALLBACK_TTL_SECONDS", 600)
     try:
