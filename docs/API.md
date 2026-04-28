@@ -132,6 +132,8 @@ Generates BlurHash strings for a batch of stored image URLs or storage-relative 
 - each item is processed independently
 - invalid paths and non-image files return `null` fields for that item instead of failing the whole batch
 - response preserves request order
+- repeated identical file targets inside one batch are computed once and reused
+- computed blurhash values are kept in an in-memory LRU cache, default size `100000`
 
 ### Common responses
 

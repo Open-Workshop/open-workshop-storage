@@ -22,6 +22,7 @@ cp ow_config_sample.py ow_config.py
 | `TRANSFER_CALLBACK_TTL_SECONDS` | no | Lifetime of outgoing callback JWTs; default `600` |
 | `TRANSFER_MAX_BYTES` | no | Global maximum transfer size; `0` disables the limit |
 | `ACCESS_SERVICE_TIMEOUT_SECONDS` | yes | Timeout for access-service download checks |
+| `BLURHASH_CACHE_SIZE` | no | In-memory LRU cache size for computed BlurHash entries; default `100000` |
 
 ## Cleanup Settings
 
@@ -101,6 +102,7 @@ TRANSFER_JWT_SECRET = "replace-me"
 TRANSFER_CALLBACK_TTL_SECONDS = 600
 TRANSFER_MAX_BYTES = 0
 ACCESS_SERVICE_TIMEOUT_SECONDS = 30
+BLURHASH_CACHE_SIZE = 100000
 
 CLEANUP_INTERVAL_SECONDS = 60
 JOB_TTL_SECONDS = 10800

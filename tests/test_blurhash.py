@@ -61,6 +61,82 @@ class BlurhashEndpointTests(unittest.TestCase):
             self.assertEqual(item["width"], 6)
             self.assertEqual(item["height"], 4)
 
+    def test_blurhash_batch_uses_cache_for_repeated_files(self):
+        with TemporaryDirectory() as temp_dir:
+            main = _load_main_module(temp_dir)
+            import open_workshop_storage.api.routes.files as files
+
+            image_path = Path(main.MAIN_DIR) / "resource" / "mods" / "123" / "logo.png"
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (6, 4), (255, 64, 0)).save(image_path, format="PNG")
+
+            files._blurhash_for_file.cache_clear()
+            original = files.image_file_to_blurhash
+            call_count = {"value": 0}
+
+            def fake_image_file_to_blurhash(*args, **kwargs):
+                call_count["value"] += 1
+                return original(*args, **kwargs)
+
+            files.image_file_to_blurhash = fake_image_file_to_blurhash
+            try:
+                with TestClient(main.app) as client:
+                    for _ in range(2):
+                        response = client.post(
+                            "/blurhashes",
+                            json={
+                                "paths": [
+                                    "https://storage.openworkshop.miskler.ru/download/resource/mods/123/logo.png"
+                                ]
+                            },
+                        )
+                        self.assertEqual(response.status_code, 200)
+
+                self.assertEqual(call_count["value"], 1)
+                self.assertEqual(files._blurhash_for_file.cache_info().maxsize, 100000)
+            finally:
+                files.image_file_to_blurhash = original
+                files._blurhash_for_file.cache_clear()
+
+    def test_blurhash_batch_deduplicates_repeated_paths_in_one_request(self):
+        with TemporaryDirectory() as temp_dir:
+            main = _load_main_module(temp_dir)
+            import open_workshop_storage.api.routes.files as files
+
+            image_path = Path(main.MAIN_DIR) / "resource" / "mods" / "123" / "logo.png"
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (6, 4), (255, 64, 0)).save(image_path, format="PNG")
+
+            files._blurhash_for_file.cache_clear()
+            original = files.image_file_to_blurhash
+            call_count = {"value": 0}
+
+            def fake_image_file_to_blurhash(*args, **kwargs):
+                call_count["value"] += 1
+                return original(*args, **kwargs)
+
+            files.image_file_to_blurhash = fake_image_file_to_blurhash
+            try:
+                with TestClient(main.app) as client:
+                    response = client.post(
+                        "/blurhashes",
+                        json={
+                            "paths": [
+                                "https://storage.openworkshop.miskler.ru/download/resource/mods/123/logo.png",
+                                "https://storage.openworkshop.miskler.ru/download/resource/mods/123/logo.png",
+                            ]
+                        },
+                    )
+
+                self.assertEqual(response.status_code, 200)
+                payload = response.json()
+                self.assertEqual(len(payload["items"]), 2)
+                self.assertEqual(payload["items"][0]["blurhash"], payload["items"][1]["blurhash"])
+                self.assertEqual(call_count["value"], 1)
+            finally:
+                files.image_file_to_blurhash = original
+                files._blurhash_for_file.cache_clear()
+
     def test_blurhash_batch_supports_cors_preflight(self):
         with TemporaryDirectory() as temp_dir:
             main = _load_main_module(temp_dir)
@@ -76,4 +152,3 @@ class BlurhashEndpointTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.headers.get("access-control-allow-origin"), "*")
-

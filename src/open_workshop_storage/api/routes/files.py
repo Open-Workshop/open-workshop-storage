@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-from urllib.parse import urlparse
+from functools import lru_cache
 from typing import Callable, Optional
+from urllib.parse import urlparse
 
 import anyio
+import ow_config as config
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
@@ -35,6 +37,17 @@ def _client_host(request: Request) -> str:
 
 def _error_response(status_code: int, content: str) -> PlainTextResponse:
     return PlainTextResponse(status_code=status_code, content=content)
+
+
+def _read_int_setting(name: str, default: int) -> int:
+    raw_value = getattr(config, name, default)
+    try:
+        return max(0, int(raw_value))
+    except (TypeError, ValueError):
+        return max(0, int(default))
+
+
+BLURHASH_CACHE_SIZE = _read_int_setting("BLURHASH_CACHE_SIZE", 100000)
 
 
 class BlurhashBatchRequest(BaseModel):
@@ -76,34 +89,65 @@ def _normalize_blurhash_target(raw_path: str) -> Optional[tuple[str, str]]:
     return storage_type, storage_path
 
 
-async def _build_blurhash_item(ctx: ServiceContext, raw_path: str) -> BlurhashItemRead:
+@lru_cache(maxsize=BLURHASH_CACHE_SIZE)
+def _blurhash_for_file(
+    real_path: str,
+    mtime_ns: int,
+    size: int,
+    components_x: int = 4,
+    components_y: int = 3,
+    max_dimension: int = 64,
+) -> tuple[str, int, int]:
+    del mtime_ns, size
+    return image_file_to_blurhash(
+        real_path,
+        components_x=components_x,
+        components_y=components_y,
+        max_dimension=max_dimension,
+    )
+
+
+def _prepare_blurhash_item(
+    ctx: ServiceContext,
+    raw_path: str,
+) -> tuple[BlurhashItemRead, Optional[tuple[str, int, int]]]:
     item = BlurhashItemRead(path=raw_path)
     normalized = _normalize_blurhash_target(raw_path)
     if normalized is None:
-        return item
+        return item, None
 
     storage_type, storage_path = normalized
     if not ctx.tools.is_allowed_type(storage_type):
-        return item
+        return item, None
 
     base_dir = os.path.join(ctx.main_dir, storage_type)
     try:
         real_path = ctx.tools.safe_path(base_dir, storage_path)
     except ValueError:
-        return item
+        return item, None
 
     if not os.path.isfile(real_path):
-        return item
+        return item, None
 
     try:
-        blurhash, width, height = await anyio.to_thread.run_sync(image_file_to_blurhash, real_path)
+        stat_result = os.stat(real_path)
     except (OSError, ValueError):
-        return item
+        return item, None
 
-    item.blurhash = blurhash
-    item.width = width
-    item.height = height
-    return item
+    return item, (real_path, stat_result.st_mtime_ns, stat_result.st_size)
+
+
+async def _compute_blurhash_for_key(key: tuple[str, int, int]) -> Optional[tuple[str, int, int]]:
+    real_path, mtime_ns, size = key
+    try:
+        return await anyio.to_thread.run_sync(
+            _blurhash_for_file,
+            real_path,
+            mtime_ns,
+            size,
+        )
+    except (OSError, ValueError):
+        return None
 
 
 @router.post(
@@ -127,8 +171,26 @@ async def blurhashes(request: Request, payload: BlurhashBatchRequest) -> Blurhas
     ctx = _ctx()
     client = _client_host(request)
     ctx.logger.info("blurhash batch request items=%s client=%s", len(payload.paths), client)
-    items = await asyncio.gather(*(_build_blurhash_item(ctx, raw_path) for raw_path in payload.paths))
-    return BlurhashBatchResponse(items=list(items))
+    prepared_items = [_prepare_blurhash_item(ctx, raw_path) for raw_path in payload.paths]
+    unique_keys = list(dict.fromkeys(key for _, key in prepared_items if key is not None))
+    blurhash_results: dict[tuple[str, int, int], Optional[tuple[str, int, int]]] = {}
+
+    if unique_keys:
+        computed = await asyncio.gather(*(_compute_blurhash_for_key(key) for key in unique_keys))
+        blurhash_results = {key: result for key, result in zip(unique_keys, computed)}
+
+    items: list[BlurhashItemRead] = []
+    for item, key in prepared_items:
+        if key is not None:
+            blurhash_data = blurhash_results.get(key)
+            if blurhash_data is not None:
+                blurhash, width, height = blurhash_data
+                item.blurhash = blurhash
+                item.width = width
+                item.height = height
+        items.append(item)
+
+    return BlurhashBatchResponse(items=items)
 
 
 @router.api_route(
