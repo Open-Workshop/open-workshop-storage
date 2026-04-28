@@ -10,6 +10,7 @@ from typing import Any
 import anyio
 import ow_config as config
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 
 from . import utils as tools
@@ -67,6 +68,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 setup_uptrace_telemetry(app)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=False,
+)
 
 
 def _job_dir(job_id: str) -> str:

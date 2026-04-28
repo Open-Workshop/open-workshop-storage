@@ -114,6 +114,30 @@ Internal delete endpoint used by Manager.
 - `403` invalid token or blocked path
 - `404` file not found
 
+### `POST` `/blurhashes`
+
+Generates BlurHash strings for a batch of stored image URLs or storage-relative download paths.
+
+### Request body
+
+- `paths`: list of storage download URLs or relative paths like `download/resource/...`
+
+### Response body
+
+- `items`: list of results in the same order as the request
+- each item contains `path`, `blurhash`, `width`, and `height`
+
+### Behavior
+
+- each item is processed independently
+- invalid paths and non-image files return `null` fields for that item instead of failing the whole batch
+- response preserves request order
+
+### Common responses
+
+- `200` BlurHash batch generated successfully
+- `400` invalid request body
+
 ## Transfer Endpoints
 
 ### `GET` / `POST` `/transfer/start`

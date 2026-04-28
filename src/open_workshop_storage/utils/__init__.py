@@ -19,7 +19,7 @@ from .files import (
     safe_path,
     sanitize_filename,
 )
-from .images import image_bytes_to_webp, image_file_to_webp
+from .images import image_bytes_to_blurhash, image_bytes_to_webp, image_file_to_blurhash, image_file_to_webp
 
 __all__ = [
     "archive_entries_packed_bytes",
@@ -31,7 +31,9 @@ __all__ = [
     "encode_transfer_jwt",
     "ensure_7z_available",
     "image_bytes_to_webp",
+    "image_bytes_to_blurhash",
     "image_file_to_webp",
+    "image_file_to_blurhash",
     "is_allowed_type",
     "is_allowed_upload_type",
     "is_safe_job_id",

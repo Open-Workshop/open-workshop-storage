@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import os
+from urllib.parse import urlparse
 from typing import Callable, Optional
 
 import anyio
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
+from pydantic import BaseModel, Field
 
 from ...core.context import ServiceContext
 from ...services import access_client
+from ...utils import image_file_to_blurhash
 
 router = APIRouter()
 _context_provider: Optional[Callable[[], ServiceContext]] = None
@@ -32,6 +35,100 @@ def _client_host(request: Request) -> str:
 
 def _error_response(status_code: int, content: str) -> PlainTextResponse:
     return PlainTextResponse(status_code=status_code, content=content)
+
+
+class BlurhashBatchRequest(BaseModel):
+    paths: list[str] = Field(default_factory=list, description="Storage download URLs or storage-relative paths.")
+
+
+class BlurhashItemRead(BaseModel):
+    path: str
+    blurhash: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
+class BlurhashBatchResponse(BaseModel):
+    items: list[BlurhashItemRead] = Field(default_factory=list)
+
+
+def _normalize_blurhash_target(raw_path: str) -> Optional[tuple[str, str]]:
+    value = str(raw_path or "").strip()
+    if not value:
+        return None
+
+    parsed = urlparse(value)
+    if parsed.scheme and parsed.netloc:
+        value = parsed.path
+
+    value = value.lstrip("/")
+    if not value.startswith("download/"):
+        return None
+
+    parts = value.split("/", 2)
+    if len(parts) < 3:
+        return None
+
+    storage_type = parts[1]
+    storage_path = parts[2]
+    if not storage_type or not storage_path:
+        return None
+    return storage_type, storage_path
+
+
+async def _build_blurhash_item(ctx: ServiceContext, raw_path: str) -> BlurhashItemRead:
+    item = BlurhashItemRead(path=raw_path)
+    normalized = _normalize_blurhash_target(raw_path)
+    if normalized is None:
+        return item
+
+    storage_type, storage_path = normalized
+    if not ctx.tools.is_allowed_type(storage_type):
+        return item
+
+    base_dir = os.path.join(ctx.main_dir, storage_type)
+    try:
+        real_path = ctx.tools.safe_path(base_dir, storage_path)
+    except ValueError:
+        return item
+
+    if not os.path.isfile(real_path):
+        return item
+
+    try:
+        blurhash, width, height = await anyio.to_thread.run_sync(image_file_to_blurhash, real_path)
+    except (OSError, ValueError):
+        return item
+
+    item.blurhash = blurhash
+    item.width = width
+    item.height = height
+    return item
+
+
+@router.post(
+    "/blurhashes",
+    tags=["Files"],
+    summary="Generate blurhashes for stored images",
+    description=(
+        "Generates BlurHash strings for a batch of stored image URLs or storage-relative download paths.\n\n"
+        "Use full storage download URLs from the website or relative paths like `download/resource/...`."
+    ),
+    status_code=200,
+    response_model=BlurhashBatchResponse,
+    response_description="Batch of BlurHash results.",
+    responses={
+        200: {
+            "description": "BlurHash batch generated successfully",
+        },
+    },
+)
+async def blurhashes(request: Request, payload: BlurhashBatchRequest) -> BlurhashBatchResponse:
+    ctx = _ctx()
+    client = _client_host(request)
+    ctx.logger.info("blurhash batch request items=%s client=%s", len(payload.paths), client)
+    items = await asyncio.gather(*(_build_blurhash_item(ctx, raw_path) for raw_path in payload.paths))
+    return BlurhashBatchResponse(items=list(items))
 
 
 @router.api_route(
