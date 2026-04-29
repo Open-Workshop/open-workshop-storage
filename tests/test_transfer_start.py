@@ -56,6 +56,16 @@ def _make_token(main_module, job_id: str) -> str:
 
 
 class TransferStartTests(unittest.TestCase):
+    def test_healthz_returns_ok(self):
+        with TemporaryDirectory() as temp_dir:
+            main = _load_main_module(temp_dir)
+
+            with TestClient(main.app) as client:
+                response = client.get("/healthz")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+
     def test_transfer_start_runs_even_if_placeholder_state_exists(self):
         with TemporaryDirectory() as temp_dir:
             main = _load_main_module(temp_dir)

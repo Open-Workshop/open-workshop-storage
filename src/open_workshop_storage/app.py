@@ -77,6 +77,11 @@ app.add_middleware(
 )
 
 
+@app.get("/healthz", include_in_schema=False)
+async def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 def _job_dir(job_id: str) -> str:
     return tools.safe_path(TEMP_DIR, job_id)
 
