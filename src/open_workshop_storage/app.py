@@ -42,9 +42,9 @@ def _read_non_negative_int_setting(name: str, default: int) -> int:
         return max(0, int(default))
 
 
-UPLOAD_LIMITER = ConcurrencyLimiter(_read_non_negative_int_setting("TRANSFER_UPLOAD_CONCURRENCY", 1))
-DOWNLOAD_LIMITER = ConcurrencyLimiter(_read_non_negative_int_setting("TRANSFER_DOWNLOAD_CONCURRENCY", 2))
-REPACK_LIMITER = ConcurrencyLimiter(_read_non_negative_int_setting("TRANSFER_REPACK_CONCURRENCY", 1))
+UPLOAD_LIMITER = ConcurrencyLimiter(_read_non_negative_int_setting("TRANSFER_UPLOAD_CONCURRENCY", 4))
+DOWNLOAD_LIMITER = ConcurrencyLimiter(_read_non_negative_int_setting("TRANSFER_DOWNLOAD_CONCURRENCY", 8))
+REPACK_LIMITER = ConcurrencyLimiter(_read_non_negative_int_setting("TRANSFER_REPACK_CONCURRENCY", 4))
 
 
 def _new_job_state() -> dict[str, Any]:
