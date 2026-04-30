@@ -81,6 +81,31 @@ The service is expected to run as a single worker process. Multi-worker deployme
 current architecture because active transfer state lives in process memory. Production runs should keep
 `--respawn-failed-workers` enabled so Granian replaces a worker that exits unexpectedly.
 
+## Watchdog
+
+If you want a tiny external health monitor, the repository ships with [`watchdog.py`](watchdog.py).
+It checks a health endpoint every 20 seconds by default and restarts the service after 5 minutes of
+continuous failure.
+
+Required env vars:
+
+- `WATCHDOG_HEALTH_URL` - service health endpoint, for example `http://127.0.0.1:8000/healthz`
+- `WATCHDOG_RESTART_COMMAND` - shell command used to restart the service, for example `systemctl restart open-workshop-storage`
+
+Optional env vars:
+
+- `WATCHDOG_CHECK_INTERVAL_SECONDS` - default `20`
+- `WATCHDOG_RESTART_AFTER_SECONDS` - default `300`
+- `WATCHDOG_REQUEST_TIMEOUT_SECONDS` - default `5`
+
+Example:
+
+```bash
+WATCHDOG_HEALTH_URL="http://127.0.0.1:8000/healthz" \
+WATCHDOG_RESTART_COMMAND="systemctl restart open-workshop-storage" \
+python watchdog.py
+```
+
 ### 6. Open the API docs
 
 - Swagger UI: `http://127.0.0.1:8000/`
