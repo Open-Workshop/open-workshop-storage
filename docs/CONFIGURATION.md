@@ -22,9 +22,9 @@ cp ow_config_sample.py ow_config.py
 | `TRANSFER_CALLBACK_TTL_SECONDS` | no | Lifetime of outgoing callback JWTs; default `600` |
 | `TRANSFER_MAX_BYTES` | no | Global maximum transfer size; `0` disables the limit |
 | `TRANSFER_MAX_UNPACKED_BYTES` | no | Global maximum unpacked archive size; `0` disables the limit |
-| `TRANSFER_UPLOAD_CONCURRENCY` | no | Maximum raw transfer uploads processed at once; default `4`, `0` disables the limiter |
-| `TRANSFER_DOWNLOAD_CONCURRENCY` | no | Maximum URL transfer downloads processed at once; default `8`, `0` disables the limiter |
-| `TRANSFER_REPACK_CONCURRENCY` | no | Maximum archive repack operations processed at once; default `4`, `0` disables the limiter |
+| `TRANSFER_UPLOAD_CONCURRENCY` | no | Maximum raw transfer uploads processed at once; default `8`, `0` disables the limiter |
+| `TRANSFER_DOWNLOAD_CONCURRENCY` | no | Maximum URL transfer downloads processed at once; default `16`, `0` disables the limiter |
+| `TRANSFER_REPACK_CONCURRENCY` | no | Maximum archive repack operations processed at once; default `8`, `0` disables the limiter |
 | `TRANSFER_UPLOAD_TIMEOUT_SECONDS` | no | Total timeout for raw transfer uploads, including processing; default `3600`, `0` disables it |
 | `TRANSFER_DOWNLOAD_TIMEOUT_SECONDS` | no | Total timeout for URL transfer downloads; default `3600`, `0` disables it |
 | `TRANSFER_CALLBACK_TIMEOUT_SECONDS` | no | Total timeout for Manager transfer callbacks; default `30`, `0` disables it |
@@ -111,9 +111,9 @@ TRANSFER_JWT_SECRET = "replace-me"
 TRANSFER_CALLBACK_TTL_SECONDS = 600
 TRANSFER_MAX_BYTES = 0
 TRANSFER_MAX_UNPACKED_BYTES = 0
-TRANSFER_UPLOAD_CONCURRENCY = 4
-TRANSFER_DOWNLOAD_CONCURRENCY = 8
-TRANSFER_REPACK_CONCURRENCY = 4
+TRANSFER_UPLOAD_CONCURRENCY = 8
+TRANSFER_DOWNLOAD_CONCURRENCY = 16
+TRANSFER_REPACK_CONCURRENCY = 8
 TRANSFER_UPLOAD_TIMEOUT_SECONDS = 3600
 TRANSFER_DOWNLOAD_TIMEOUT_SECONDS = 3600
 TRANSFER_CALLBACK_TIMEOUT_SECONDS = 30
