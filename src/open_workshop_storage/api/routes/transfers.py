@@ -97,6 +97,14 @@ def _error_response(status_code: int, content: str) -> PlainTextResponse:
     return PlainTextResponse(status_code=status_code, content=content)
 
 
+def _busy_response() -> PlainTextResponse:
+    return PlainTextResponse(
+        status_code=429,
+        content="Storage busy",
+        headers={"Retry-After": "30"},
+    )
+
+
 async def _extract_token(request: Request) -> Optional[str]:
     token = request.query_params.get("token")
     if token:
@@ -127,6 +135,17 @@ def _parse_non_negative_int(value: Any) -> Optional[int]:
     if parsed < 0:
         return None
     return parsed
+
+
+def _read_timeout_seconds(ctx: ServiceContext, name: str, default: float) -> Optional[float]:
+    raw_value = getattr(ctx.config, name, default)
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = float(default)
+    if value <= 0:
+        return None
+    return value
 
 
 def _extract_bearer_token(request: Request) -> Optional[str]:
@@ -408,28 +427,6 @@ async def _process_archive_upload(
     ctx: ServiceContext,
     spec: UploadSpec,
 ) -> tuple[Optional[int], Optional[PlainTextResponse]]:
-    _, is_encrypted, _ = await anyio.to_thread.run_sync(ctx.tools.probe_archive, spec.upload_abs)
-    if is_encrypted:
-        await ctx.set_state(spec.job_id, status="error", error="encrypted_zip")
-        await ctx.broadcast(
-            spec.job_id,
-            await ctx.build_state_event(spec.job_id, "error", message="zip encrypted"),
-        )
-        await update_job_meta(
-            ctx,
-            spec.job_id,
-            {"status": "error", "error_reason": "encrypted_zip"},
-        )
-        _remove_if_exists(
-            ctx,
-            spec.upload_abs,
-            "failed to cleanup encrypted zip job_id=%s",
-            spec.job_id,
-        )
-        await _notify_upload_error(ctx, spec, "encrypted_zip")
-        await ctx.job_error_cleanup(spec.job_id, "encrypted_zip")
-        return None, _error_response(400, "Encrypted zip not allowed")
-
     await ctx.set_stage(spec.job_id, "uploaded")
     repack_ok, _, _, unpacked_bytes, repack_reason = await ctx.run_repack_job(
         spec.job_id,
@@ -441,8 +438,13 @@ async def _process_archive_upload(
         return unpacked_bytes, None
 
     await _notify_upload_error(ctx, spec, repack_reason or "repack_failed")
+    await ctx.job_error_cleanup(spec.job_id, repack_reason or "repack_failed")
     if repack_reason == "encrypted_zip":
         return None, _error_response(400, "Encrypted zip not allowed")
+    if repack_reason == "unpacked_size_limit":
+        return unpacked_bytes, _error_response(413, "Archive too large")
+    if repack_reason == "busy":
+        return None, _busy_response()
     return None, _error_response(500, "Repack failed")
 
 
@@ -515,6 +517,84 @@ async def _process_image_upload(
     )
     await ctx.set_stage(spec.job_id, "packed")
     return None
+
+
+async def _execute_transfer_upload(
+    ctx: ServiceContext,
+    request: Request,
+    spec: UploadSpec,
+    total: Optional[int],
+) -> dict[str, Any] | PlainTextResponse:
+    await _initialize_upload_job(ctx, spec, total)
+    start_ts = time.monotonic()
+
+    try:
+        stream_result = await _stream_upload_body(ctx, request, spec, total)
+        if isinstance(stream_result, PlainTextResponse):
+            return stream_result
+        duration = time.monotonic() - start_ts
+        ctx.logger.info(
+            "transfer upload done job_id=%s bytes=%s duration=%.2fs",
+            spec.job_id,
+            stream_result.downloaded,
+            duration,
+        )
+
+        unpacked_bytes = None
+        if spec.transfer_kind == "archive":
+            unpacked_bytes, archive_error = await _process_archive_upload(ctx, spec)
+            if archive_error is not None:
+                return archive_error
+        else:
+            image_error = await _process_image_upload(ctx, spec)
+            if image_error is not None:
+                return image_error
+
+        await ctx.broadcast(spec.job_id, await ctx.build_state_event(spec.job_id, "complete"))
+        callback_success_payload = {
+            **spec.callback_payload,
+            "job_id": spec.job_id,
+            "status": "success",
+            "bytes": stream_result.downloaded,
+            "total": stream_result.final_total,
+            "packed_format": "zip" if spec.transfer_kind == "archive" else "webp",
+        }
+        if spec.transfer_kind == "archive" and unpacked_bytes is not None:
+            callback_success_payload["unpacked_bytes"] = unpacked_bytes
+        await ctx.notify_manager(callback_success_payload)
+        return {
+            "job_id": spec.job_id,
+            "bytes": stream_result.downloaded,
+            "total": stream_result.final_total,
+        }
+    except TimeoutError:
+        raise
+    except Exception as exc:
+        ctx.logger.exception("transfer upload failed job_id=%s", spec.job_id)
+        _remove_if_exists(
+            ctx,
+            spec.upload_abs,
+            "failed to cleanup partial file job_id=%s",
+            spec.job_id,
+        )
+        await update_job_meta(
+            ctx,
+            spec.job_id,
+            {
+                "status": "error",
+                "error": str(exc),
+                "upload_completed_at": int(time.time()),
+            },
+        )
+        await ctx.set_state(spec.job_id, status="error", error=str(exc))
+        await ctx.broadcast(
+            spec.job_id,
+            await ctx.build_state_event(spec.job_id, "error", message="upload failed"),
+        )
+        await _notify_upload_error(ctx, spec, "exception")
+        return _error_response(500, "Upload failed")
+    finally:
+        await ctx.close_clients(spec.job_id)
 
 
 @router.api_route(
@@ -640,7 +720,9 @@ async def transfer_start(request: Request):
         400: {"description": "Invalid request", "content": {"text/plain": {"example": "Invalid job id"}}},
         401: {"description": "Token not found", "content": {"text/plain": {"example": "Token not found"}}},
         403: {"description": "Access denied", "content": {"text/plain": {"example": "Access denied"}}},
+        408: {"description": "Upload timed out", "content": {"text/plain": {"example": "Upload timed out"}}},
         413: {"description": "File too large", "content": {"text/plain": {"example": "File too large"}}},
+        429: {"description": "Storage busy", "content": {"text/plain": {"example": "Storage busy"}}},
         500: {"description": "Server error", "content": {"text/plain": {"example": "Upload failed"}}},
     },
     openapi_extra={
@@ -709,74 +791,23 @@ async def transfer_upload(request: Request):
         client,
     )
 
-    await _initialize_upload_job(ctx, spec, total)
-    start_ts = time.monotonic()
+    async with ctx.upload_limiter.acquire_nowait() as acquired:
+        if not acquired:
+            ctx.logger.warning("transfer upload rejected (busy) job_id=%s client=%s", spec.job_id, client)
+            await _notify_upload_error(ctx, spec, "busy")
+            return _busy_response()
 
-    try:
-        stream_result = await _stream_upload_body(ctx, request, spec, total)
-        if isinstance(stream_result, PlainTextResponse):
-            return stream_result
-        duration = time.monotonic() - start_ts
-        ctx.logger.info(
-            "transfer upload done job_id=%s bytes=%s duration=%.2fs",
-            spec.job_id,
-            stream_result.downloaded,
-            duration,
-        )
-
-        unpacked_bytes = None
-        if spec.transfer_kind == "archive":
-            unpacked_bytes, archive_error = await _process_archive_upload(ctx, spec)
-            if archive_error is not None:
-                return archive_error
-        else:
-            image_error = await _process_image_upload(ctx, spec)
-            if image_error is not None:
-                return image_error
-
-        await ctx.broadcast(spec.job_id, await ctx.build_state_event(spec.job_id, "complete"))
-        callback_success_payload = {
-            **spec.callback_payload,
-            "job_id": spec.job_id,
-            "status": "success",
-            "bytes": stream_result.downloaded,
-            "total": stream_result.final_total,
-            "packed_format": "zip" if spec.transfer_kind == "archive" else "webp",
-        }
-        if spec.transfer_kind == "archive" and unpacked_bytes is not None:
-            callback_success_payload["unpacked_bytes"] = unpacked_bytes
-        await ctx.notify_manager(callback_success_payload)
-        return {
-            "job_id": spec.job_id,
-            "bytes": stream_result.downloaded,
-            "total": stream_result.final_total,
-        }
-    except Exception as exc:
-        ctx.logger.exception("transfer upload failed job_id=%s", spec.job_id)
-        _remove_if_exists(
-            ctx,
-            spec.upload_abs,
-            "failed to cleanup partial file job_id=%s",
-            spec.job_id,
-        )
-        await update_job_meta(
-            ctx,
-            spec.job_id,
-            {
-                "status": "error",
-                "error": str(exc),
-                "upload_completed_at": int(time.time()),
-            },
-        )
-        await ctx.set_state(spec.job_id, status="error", error=str(exc))
-        await ctx.broadcast(
-            spec.job_id,
-            await ctx.build_state_event(spec.job_id, "error", message="upload failed"),
-        )
-        await _notify_upload_error(ctx, spec, "exception")
-        return _error_response(500, "Upload failed")
-    finally:
-        await ctx.close_clients(spec.job_id)
+        upload_timeout = _read_timeout_seconds(ctx, "TRANSFER_UPLOAD_TIMEOUT_SECONDS", 3600)
+        try:
+            if upload_timeout is None:
+                return await _execute_transfer_upload(ctx, request, spec, total)
+            with anyio.fail_after(upload_timeout):
+                return await _execute_transfer_upload(ctx, request, spec, total)
+        except TimeoutError:
+            ctx.logger.warning("transfer upload timed out job_id=%s timeout=%s", spec.job_id, upload_timeout)
+            await _notify_upload_error(ctx, spec, "timeout")
+            await ctx.job_error_cleanup(spec.job_id, "timeout")
+            return _error_response(408, "Upload timed out")
 
 
 @router.websocket("/transfer/ws/{job_id}")
@@ -854,6 +885,8 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
         401: {"description": "Token not found", "content": {"text/plain": {"example": "Token not found"}}},
         403: {"description": "Access denied", "content": {"text/plain": {"example": "Access denied"}}},
         404: {"description": "Job not found", "content": {"text/plain": {"example": "Job not found"}}},
+        413: {"description": "Archive too large", "content": {"text/plain": {"example": "Archive too large"}}},
+        429: {"description": "Storage busy", "content": {"text/plain": {"example": "Storage busy"}}},
         500: {"description": "Repack failed", "content": {"text/plain": {"example": "Repack failed"}}},
     },
 )
@@ -908,6 +941,10 @@ async def transfer_repack(
     if not repack_ok:
         if repack_reason == "encrypted_zip":
             return _error_response(400, "Encrypted zip not allowed")
+        if repack_reason == "unpacked_size_limit":
+            return _error_response(413, "Archive too large")
+        if repack_reason == "busy":
+            return _busy_response()
         return _error_response(500, "Repack failed")
 
     return {

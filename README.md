@@ -74,11 +74,12 @@ granian --working-dir src --interface asgi --host 127.0.0.1 --port 8000 open_wor
 Server:
 
 ```bash
-granian --working-dir src --interface asgi --host 0.0.0.0 --port 8000 --access-log open_workshop_storage.app:app
+granian --working-dir src --interface asgi --host 0.0.0.0 --port 8000 --workers 1 --respawn-failed-workers --access-log open_workshop_storage.app:app
 ```
 
 The service is expected to run as a single worker process. Multi-worker deployment is not supported by the
-current architecture because active transfer state lives in process memory.
+current architecture because active transfer state lives in process memory. Production runs should keep
+`--respawn-failed-workers` enabled so Granian replaces a worker that exits unexpectedly.
 
 ### 6. Open the API docs
 

@@ -20,6 +20,7 @@ from .api.routes.transfers import configure_context_provider as configure_transf
 from .api.routes.transfers import router as transfer_router
 from .core.context import ServiceContext
 from .core.job_state import new_job_state, state_event_payload
+from .core.limits import ConcurrencyLimiter
 from .observability.uptrace import setup_uptrace_telemetry
 from .services.transfer_jobs import cleanup_loop, notify_manager, run_cleanup, run_download_job, run_repack_job
 
@@ -31,6 +32,19 @@ TEMP_DIR = os.path.join(MAIN_DIR, "temp")
 JOB_STATE: dict[str, dict[str, Any]] = {}
 JOB_LOCK = asyncio.Lock()
 PROGRESS_PUSH_INTERVAL = 0.25
+
+
+def _read_non_negative_int_setting(name: str, default: int) -> int:
+    raw_value = getattr(config, name, default)
+    try:
+        return max(0, int(raw_value))
+    except (TypeError, ValueError):
+        return max(0, int(default))
+
+
+UPLOAD_LIMITER = ConcurrencyLimiter(_read_non_negative_int_setting("TRANSFER_UPLOAD_CONCURRENCY", 1))
+DOWNLOAD_LIMITER = ConcurrencyLimiter(_read_non_negative_int_setting("TRANSFER_DOWNLOAD_CONCURRENCY", 2))
+REPACK_LIMITER = ConcurrencyLimiter(_read_non_negative_int_setting("TRANSFER_REPACK_CONCURRENCY", 1))
 
 
 def _new_job_state() -> dict[str, Any]:
@@ -206,6 +220,9 @@ def _build_service_context() -> ServiceContext:
         tools=tools,
         job_state=JOB_STATE,
         job_lock=JOB_LOCK,
+        upload_limiter=UPLOAD_LIMITER,
+        download_limiter=DOWNLOAD_LIMITER,
+        repack_limiter=REPACK_LIMITER,
         progress_push_interval=PROGRESS_PUSH_INTERVAL,
         new_job_state=_new_job_state,
         job_dir=_job_dir,

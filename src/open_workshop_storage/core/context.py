@@ -7,6 +7,8 @@ from typing import Any, Awaitable, Callable, Coroutine, Optional
 
 from fastapi import FastAPI
 
+from .limits import ConcurrencyLimiter
+
 JsonDict = dict[str, Any]
 JobState = dict[str, Any]
 
@@ -22,6 +24,9 @@ class ServiceContext:
     tools: Any
     job_state: dict[str, JobState]
     job_lock: asyncio.Lock
+    upload_limiter: ConcurrencyLimiter
+    download_limiter: ConcurrencyLimiter
+    repack_limiter: ConcurrencyLimiter
     progress_push_interval: float
     new_job_state: Callable[[], JobState]
     job_dir: Callable[[str], str]

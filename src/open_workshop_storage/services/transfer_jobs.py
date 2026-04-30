@@ -14,6 +14,32 @@ from ..core.job_meta import update_job_meta
 from ..core.job_state import state_event_payload
 
 
+def _read_positive_int_setting(ctx: ServiceContext, name: str, default: int = 0) -> Optional[int]:
+    raw_value = getattr(ctx.config, name, default)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = int(default)
+    if value <= 0:
+        return None
+    return value
+
+
+def _read_timeout_seconds(ctx: ServiceContext, name: str, default: float) -> Optional[float]:
+    raw_value = getattr(ctx.config, name, default)
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = float(default)
+    if value <= 0:
+        return None
+    return value
+
+
+def _client_timeout(ctx: ServiceContext, name: str, default: float) -> aiohttp.ClientTimeout:
+    return aiohttp.ClientTimeout(total=_read_timeout_seconds(ctx, name, default))
+
+
 async def run_cleanup(ctx: ServiceContext) -> None:
     now = time.time()
     cleanup_threshold = getattr(ctx.config, "JOB_TTL_SECONDS", 10800)
@@ -89,7 +115,9 @@ async def notify_manager(ctx: ServiceContext, payload: JsonDict) -> None:
         ctx.logger.warning("transfer callback skipped (missing JWT secret)")
         return
     headers = {"Authorization": f"Bearer {token}"}
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(
+        timeout=_client_timeout(ctx, "TRANSFER_CALLBACK_TIMEOUT_SECONDS", 30),
+    ) as session:
         try:
             ctx.logger.info(
                 "transfer callback send url=%s job_id=%s status=%s",
@@ -122,6 +150,31 @@ async def run_repack_job(
     pack_format: str,
     pack_level: int,
 ) -> tuple[bool, Optional[str], Optional[int], Optional[int], Optional[str]]:
+    async with ctx.repack_limiter.acquire_nowait() as acquired:
+        if not acquired:
+            ctx.logger.warning("transfer repack rejected (busy) job_id=%s", job_id)
+            await ctx.set_state(job_id, status="error", error="busy")
+            await ctx.broadcast(
+                job_id,
+                await ctx.build_state_event(job_id, "error", message="storage busy"),
+            )
+            await update_job_meta(
+                ctx,
+                job_id,
+                {"status": "error", "error_reason": "busy"},
+            )
+            return False, None, None, None, "busy"
+
+        return await _run_repack_job_limited(ctx, job_id, download_abs, pack_format, pack_level)
+
+
+async def _run_repack_job_limited(
+    ctx: ServiceContext,
+    job_id: str,
+    download_abs: str,
+    pack_format: str,
+    pack_level: int,
+) -> tuple[bool, Optional[str], Optional[int], Optional[int], Optional[str]]:
     if pack_format != "zip":
         await ctx.set_state(job_id, status="error", error="unsupported_format")
         await ctx.broadcast(
@@ -133,8 +186,22 @@ async def run_repack_job(
     packed_rel = os.path.join("temp", job_id, "packed.zip")
     packed_abs = ctx.tools.safe_path(ctx.main_dir, packed_rel)
 
-    archive_type, is_encrypted, archive_entries = await anyio.to_thread.run_sync(ctx.tools.probe_archive, download_abs)
-    unpacked_bytes = await anyio.to_thread.run_sync(ctx.tools.archive_entries_unpacked_bytes, archive_entries)
+    try:
+        archive_type, is_encrypted, archive_entries = await anyio.to_thread.run_sync(
+            ctx.tools.probe_archive,
+            download_abs,
+        )
+        unpacked_bytes = await anyio.to_thread.run_sync(ctx.tools.archive_entries_unpacked_bytes, archive_entries)
+    except Exception as exc:
+        ctx.logger.exception("transfer archive probe failed job_id=%s", job_id)
+        await ctx.set_state(job_id, status="error", error=str(exc))
+        await ctx.broadcast(
+            job_id,
+            await ctx.build_state_event(job_id, "error", message="archive probe failed"),
+        )
+        return False, None, None, None, "repack_failed"
+
+    max_unpacked_bytes = _read_positive_int_setting(ctx, "TRANSFER_MAX_UNPACKED_BYTES", 0)
     if is_encrypted:
         await ctx.set_state(job_id, status="error", error="encrypted_zip")
         await ctx.broadcast(
@@ -148,6 +215,29 @@ async def run_repack_job(
         )
         ctx.logger.warning("transfer repack denied (encrypted zip) job_id=%s", job_id)
         return False, None, None, unpacked_bytes, "encrypted_zip"
+
+    if max_unpacked_bytes is not None and unpacked_bytes is not None and unpacked_bytes > max_unpacked_bytes:
+        await ctx.set_state(job_id, status="error", error="unpacked_size_limit")
+        await ctx.broadcast(
+            job_id,
+            await ctx.build_state_event(job_id, "error", message="archive too large"),
+        )
+        await update_job_meta(
+            ctx,
+            job_id,
+            {
+                "status": "error",
+                "error_reason": "unpacked_size_limit",
+                "unpacked_bytes": unpacked_bytes,
+            },
+        )
+        ctx.logger.warning(
+            "transfer repack denied (unpacked size limit) job_id=%s unpacked_bytes=%s limit=%s",
+            job_id,
+            unpacked_bytes,
+            max_unpacked_bytes,
+        )
+        return False, None, None, unpacked_bytes, "unpacked_size_limit"
 
     if archive_type == "zip":
         zip_ok = await anyio.to_thread.run_sync(
@@ -309,6 +399,34 @@ async def run_download_job(
     max_bytes: Optional[int],
     callback_payload: JsonDict,
 ) -> None:
+    async with ctx.download_limiter.acquire_nowait() as acquired:
+        if not acquired:
+            ctx.logger.warning("transfer download rejected (busy) job_id=%s", job_id)
+            await ctx.set_state(job_id, status="error", error="busy")
+            await ctx.broadcast(
+                job_id,
+                await ctx.build_state_event(job_id, "error", message="storage busy"),
+            )
+            await update_job_meta(
+                ctx,
+                job_id,
+                {"status": "error", "error_reason": "busy"},
+            )
+            await ctx.notify_manager({**callback_payload, "job_id": job_id, "status": "error", "reason": "busy"})
+            await ctx.job_error_cleanup(job_id, "busy")
+            return
+
+        await _run_download_job_limited(ctx, job_id, download_url, download_abs, max_bytes, callback_payload)
+
+
+async def _run_download_job_limited(
+    ctx: ServiceContext,
+    job_id: str,
+    download_url: str,
+    download_abs: str,
+    max_bytes: Optional[int],
+    callback_payload: JsonDict,
+) -> None:
     await ctx.set_state(job_id, status="downloading", error=None)
     await ctx.set_stage(job_id, "downloading")
     downloaded = 0
@@ -321,7 +439,9 @@ async def run_download_job(
         warning_message="failed to update meta (start) for job_id=%s",
     )
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(
+            timeout=_client_timeout(ctx, "TRANSFER_DOWNLOAD_TIMEOUT_SECONDS", 3600),
+        ) as session:
             async with session.get(download_url) as resp:
                 if resp.status != 200:
                     await ctx.set_state(job_id, status="error", error=f"status:{resp.status}")

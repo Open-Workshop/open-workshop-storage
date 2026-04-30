@@ -21,6 +21,15 @@ cp ow_config_sample.py ow_config.py
 | `TRANSFER_JWT_SECRET` | yes | Shared secret for transfer JWT validation and Manager callback signing |
 | `TRANSFER_CALLBACK_TTL_SECONDS` | no | Lifetime of outgoing callback JWTs; default `600` |
 | `TRANSFER_MAX_BYTES` | no | Global maximum transfer size; `0` disables the limit |
+| `TRANSFER_MAX_UNPACKED_BYTES` | no | Global maximum unpacked archive size; `0` disables the limit |
+| `TRANSFER_UPLOAD_CONCURRENCY` | no | Maximum raw transfer uploads processed at once; default `1`, `0` disables the limiter |
+| `TRANSFER_DOWNLOAD_CONCURRENCY` | no | Maximum URL transfer downloads processed at once; default `2`, `0` disables the limiter |
+| `TRANSFER_REPACK_CONCURRENCY` | no | Maximum archive repack operations processed at once; default `1`, `0` disables the limiter |
+| `TRANSFER_UPLOAD_TIMEOUT_SECONDS` | no | Total timeout for raw transfer uploads, including processing; default `3600`, `0` disables it |
+| `TRANSFER_DOWNLOAD_TIMEOUT_SECONDS` | no | Total timeout for URL transfer downloads; default `3600`, `0` disables it |
+| `TRANSFER_CALLBACK_TIMEOUT_SECONDS` | no | Total timeout for Manager transfer callbacks; default `30`, `0` disables it |
+| `SEVEN_ZIP_TIMEOUT_SECONDS` | no | Total timeout for each `7z` command; default `3600`, `0` disables it |
+| `SEVEN_ZIP_IDLE_TIMEOUT_SECONDS` | no | Idle timeout while waiting for the next `7z` output chunk; default `60`, `0` disables it |
 | `ACCESS_SERVICE_TIMEOUT_SECONDS` | yes | Timeout for access-service download checks |
 | `BLURHASH_CACHE_SIZE` | no | In-memory LRU cache size for computed BlurHash entries; default `100000` |
 
@@ -101,6 +110,15 @@ MANAGER_TRANSFER_CALLBACK_URL = ""
 TRANSFER_JWT_SECRET = "replace-me"
 TRANSFER_CALLBACK_TTL_SECONDS = 600
 TRANSFER_MAX_BYTES = 0
+TRANSFER_MAX_UNPACKED_BYTES = 0
+TRANSFER_UPLOAD_CONCURRENCY = 1
+TRANSFER_DOWNLOAD_CONCURRENCY = 2
+TRANSFER_REPACK_CONCURRENCY = 1
+TRANSFER_UPLOAD_TIMEOUT_SECONDS = 3600
+TRANSFER_DOWNLOAD_TIMEOUT_SECONDS = 3600
+TRANSFER_CALLBACK_TIMEOUT_SECONDS = 30
+SEVEN_ZIP_TIMEOUT_SECONDS = 3600
+SEVEN_ZIP_IDLE_TIMEOUT_SECONDS = 60
 ACCESS_SERVICE_TIMEOUT_SECONDS = 30
 BLURHASH_CACHE_SIZE = 100000
 

@@ -223,7 +223,9 @@ Image-specific fields:
 - `400` invalid job or unsupported payload
 - `401` token missing
 - `403` invalid JWT
+- `408` upload timed out
 - `413` size limit exceeded
+- `429` storage is busy processing another transfer
 - `500` packing or upload failure
 
 ### `WS` `/transfer/ws/{job_id}`
@@ -280,6 +282,8 @@ Repack an existing uploaded source file for a job.
 - `401` token missing
 - `403` invalid token
 - `404` job or source file not found
+- `413` unpacked archive size limit exceeded
+- `429` storage is busy processing another repack
 - `500` repack failed
 
 ### `POST` `/transfer/move`

@@ -5,19 +5,47 @@ import os
 import pty
 import re
 import select
+import signal
 import shutil
 import subprocess
 import sys
+import time
+from contextlib import suppress
 from typing import Any, Callable, Optional
 
 SEVEN_ZIP_BIN = "7z"
 SEVEN_ZIP_PROGRESS_RE = re.compile(r"(?<!\d)(100|[1-9]?\d)%")
 ZIP_MIN_COMPRESSION_SAVINGS_RATIO = 0.01
+DEFAULT_SEVEN_ZIP_TIMEOUT_SECONDS = 3600
+DEFAULT_SEVEN_ZIP_IDLE_TIMEOUT_SECONDS = 60
+
+
+class SevenZipTimeoutError(RuntimeError):
+    pass
 
 
 def ensure_7z_available() -> None:
     if shutil.which(SEVEN_ZIP_BIN) is None:
         raise RuntimeError("7z binary is required but not found in PATH")
+
+
+def _read_timeout_value(raw_value: Any, default: float) -> Optional[float]:
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = float(default)
+    if value <= 0:
+        return None
+    return value
+
+
+def _timeout_suffix(timeout: Optional[float]) -> str:
+    return f" after {timeout:g}s" if timeout is not None else ""
+
+
+def _timeout_error(kind: Optional[str], timeout: Optional[float]) -> SevenZipTimeoutError:
+    prefix = f"7z {kind} timed out" if kind else "7z timed out"
+    return SevenZipTimeoutError(f"{prefix}{_timeout_suffix(timeout)}")
 
 
 def _resolve_tools_export(name: str, fallback: Callable[..., Any]) -> Callable[..., Any]:
@@ -30,14 +58,83 @@ def _resolve_tools_export(name: str, fallback: Callable[..., Any]) -> Callable[.
     return fallback
 
 
-def _run_7z(args: list[str], cwd: Optional[str] = None) -> subprocess.CompletedProcess:
+def _read_7z_timeout(timeout_seconds: Optional[float] = None) -> Optional[float]:
+    if timeout_seconds is None:
+        raw_value: Any = DEFAULT_SEVEN_ZIP_TIMEOUT_SECONDS
+        try:
+            import ow_config as config
+
+            raw_value = getattr(
+                config,
+                "SEVEN_ZIP_TIMEOUT_SECONDS",
+                getattr(config, "ARCHIVE_COMMAND_TIMEOUT_SECONDS", DEFAULT_SEVEN_ZIP_TIMEOUT_SECONDS),
+            )
+        except Exception:
+            pass
+    else:
+        raw_value = timeout_seconds
+
+    return _read_timeout_value(raw_value, DEFAULT_SEVEN_ZIP_TIMEOUT_SECONDS)
+
+
+def _read_7z_idle_timeout(timeout_seconds: Optional[float] = None) -> Optional[float]:
+    if timeout_seconds is None:
+        raw_value: Any = DEFAULT_SEVEN_ZIP_IDLE_TIMEOUT_SECONDS
+        try:
+            import ow_config as config
+
+            raw_value = getattr(
+                config,
+                "SEVEN_ZIP_IDLE_TIMEOUT_SECONDS",
+                getattr(config, "ARCHIVE_COMMAND_IDLE_TIMEOUT_SECONDS", DEFAULT_SEVEN_ZIP_IDLE_TIMEOUT_SECONDS),
+            )
+        except Exception:
+            pass
+    else:
+        raw_value = timeout_seconds
+
+    return _read_timeout_value(raw_value, DEFAULT_SEVEN_ZIP_IDLE_TIMEOUT_SECONDS)
+
+
+def _terminate_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+    except Exception:
+        with suppress(Exception):
+            process.terminate()
+    try:
+        process.wait(timeout=5)
+        return
+    except Exception:
+        pass
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    except Exception:
+        with suppress(Exception):
+            process.kill()
+    with suppress(Exception):
+        process.wait(timeout=5)
+
+
+def _run_7z(
+    args: list[str],
+    cwd: Optional[str] = None,
+    timeout_seconds: Optional[float] = None,
+) -> subprocess.CompletedProcess:
     _resolve_tools_export("ensure_7z_available", ensure_7z_available)()
-    return subprocess.run(
-        [SEVEN_ZIP_BIN, *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-    )
+    timeout = _read_7z_timeout(timeout_seconds)
+    try:
+        return subprocess.run(
+            [SEVEN_ZIP_BIN, *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise _timeout_error(None, timeout) from exc
 
 
 def _drain_7z_progress_stream(
@@ -64,8 +161,12 @@ def _run_7z_with_progress(
     args: list[str],
     cwd: Optional[str] = None,
     on_progress: Optional[Callable[[int], None]] = None,
+    timeout_seconds: Optional[float] = None,
+    idle_timeout_seconds: Optional[float] = None,
 ) -> subprocess.CompletedProcess:
     _resolve_tools_export("ensure_7z_available", ensure_7z_available)()
+    timeout = _read_7z_timeout(timeout_seconds)
+    idle_timeout = _read_7z_idle_timeout(idle_timeout_seconds)
     master_fd, slave_fd = pty.openpty()
     process = subprocess.Popen(
         [SEVEN_ZIP_BIN, *args],
@@ -74,14 +175,36 @@ def _run_7z_with_progress(
         stdout=slave_fd,
         stderr=slave_fd,
         close_fds=True,
+        start_new_session=True,
     )
     os.close(slave_fd)
 
     output_chunks: list[str] = []
     progress_state = {"pending": "", "last_percent": -1}
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    idle_deadline = time.monotonic() + idle_timeout if idle_timeout is not None else None
+    timed_out = False
     try:
         while True:
-            ready, _, _ = select.select([master_fd], [], [], 0.1)
+            now = time.monotonic()
+            select_timeout = 0.1
+            remaining_timeouts: list[float] = []
+            if deadline is not None:
+                remaining = deadline - now
+                if remaining <= 0:
+                    timed_out = True
+                    raise _timeout_error(None, timeout)
+                remaining_timeouts.append(remaining)
+            if idle_deadline is not None:
+                remaining_idle = idle_deadline - now
+                if remaining_idle <= 0:
+                    timed_out = True
+                    raise _timeout_error("idle", idle_timeout)
+                remaining_timeouts.append(remaining_idle)
+            if remaining_timeouts:
+                select_timeout = min(select_timeout, max(0.0, min(remaining_timeouts)))
+
+            ready, _, _ = select.select([master_fd], [], [], select_timeout)
             if master_fd in ready:
                 try:
                     data = os.read(master_fd, 4096)
@@ -94,6 +217,8 @@ def _run_7z_with_progress(
                 chunk = data.decode("utf-8", errors="replace")
                 output_chunks.append(chunk)
                 _drain_7z_progress_stream(chunk, progress_state, on_progress)
+                if idle_timeout is not None:
+                    idle_deadline = time.monotonic() + idle_timeout
             if process.poll() is not None and master_fd not in ready:
                 try:
                     data = os.read(master_fd, 4096)
@@ -106,7 +231,11 @@ def _run_7z_with_progress(
                 chunk = data.decode("utf-8", errors="replace")
                 output_chunks.append(chunk)
                 _drain_7z_progress_stream(chunk, progress_state, on_progress)
+                if idle_timeout is not None:
+                    idle_deadline = time.monotonic() + idle_timeout
     finally:
+        if timed_out:
+            _terminate_process(process)
         os.close(master_fd)
 
     returncode = process.wait()

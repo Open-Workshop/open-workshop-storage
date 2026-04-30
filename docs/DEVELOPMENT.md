@@ -55,6 +55,9 @@ Do not run the service with multiple workers.
 The current implementation keeps active jobs and WebSocket subscribers in process memory. For development,
 that means a single Granian worker is the correct and expected runtime mode.
 
+For production, keep Granian on `--workers 1` but enable `--respawn-failed-workers` so the master process
+replaces a crashed worker instead of leaving the service active-but-unresponsive.
+
 ## Useful Files
 
 - `ow_config_sample.py` - configuration template
