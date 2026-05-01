@@ -16,6 +16,7 @@ from fastapi.responses import PlainTextResponse
 from ...core.context import ServiceContext
 from ...core.job_meta import update_job_meta
 from ...core.job_state import reset_job_state, state_event_payload
+from ...service_factory import get_current_service_context
 
 router = APIRouter()
 _context_provider: Optional[Callable[[], ServiceContext]] = None
@@ -84,9 +85,12 @@ def configure_context_provider(provider: Callable[[], ServiceContext]) -> None:
 
 
 def _ctx() -> ServiceContext:
-    if _context_provider is None:
-        raise RuntimeError("transfer context provider is not configured")
-    return _context_provider()
+    try:
+        return get_current_service_context()
+    except RuntimeError:
+        if _context_provider is None:
+            raise RuntimeError("transfer context provider is not configured")
+        return _context_provider()
 
 
 def _client_host(request: Request) -> str:

@@ -6,16 +6,24 @@
 [![Discord](https://img.shields.io/discord/792572437292253224?label=Discord&labelColor=%232c2f33&color=%237289da)](https://discord.gg/UnJnGHNbBp)
 [![Telegram](https://img.shields.io/badge/Telegram-24A1DE)](https://t.me/miskler_dev)
 
-Single-worker storage backend for Open Workshop.
+Open Workshop Storage is split into two outward-facing services that share the same storage root and helper code:
 
-The service stores uploaded files, validates download access for protected archives through the access service, ingests transfer jobs
-from external URLs or raw uploads, repacks archives to ZIP, converts images to WebP, streams progress over
-WebSocket, and reports completion back to Manager.
+- `distributor` serves stored files and blurhash metadata
+- `loader` ingests uploads, runs transfer jobs, repacks artifacts, and reports completion back to Manager
+
+The loader side still uses a single-worker runtime because it owns in-memory transfer state and WebSocket
+fan-out. The distributor side is stateless apart from its in-memory BlurHash cache and can be scaled
+independently.
+
+When both services are published on the same domain, only the conflicting control endpoints need separate
+prefixes. In practice that means docs and health URLs live under `/distributor/...` and `/loader/...`,
+while business routes like `/download/...`, `/upload`, and `/transfer/...` stay at their natural paths.
 
 ## Highlights
 
-- Single-worker runtime designed around in-memory job state.
-- FastAPI application served with Granian.
+- FastAPI applications served with Granian.
+- Separate loader and distributor entrypoints for clearer service boundaries.
+- Loader runtime designed around in-memory job state and WebSocket progress.
 - Protected archive downloads with access-service validation.
 - Transfer pipeline for remote downloads and direct raw-body uploads.
 - Archive repacking with `7z`, encrypted ZIP rejection, and unpacked-size heuristics.
@@ -63,21 +71,21 @@ Configuration details: [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
 ./.venv/bin/python token_gen.py
 ```
 
-### 5. Start the service
+### 5. Start the services
 
-Local:
-
-```bash
-granian --working-dir src --interface asgi --host 127.0.0.1 --port 8000 open_workshop_storage.app:app
-```
-
-Server:
+Distributor:
 
 ```bash
-granian --working-dir src --interface asgi --host 0.0.0.0 --port 8000 --workers 1 --respawn-failed-workers --access-log open_workshop_storage.app:app
+granian --working-dir src --interface asgi --host 127.0.0.1 --port 8000 open_workshop_storage.distributor:app
 ```
 
-The service is expected to run as a single worker process. Multi-worker deployment is not supported by the
+Loader:
+
+```bash
+granian --working-dir src --interface asgi --host 127.0.0.1 --port 8001 --workers 1 --respawn-failed-workers --access-log open_workshop_storage.loader:app
+```
+
+The loader service is expected to run as a single worker process. Multi-worker deployment is not supported by the
 current architecture because active transfer state lives in process memory. Production runs should keep
 `--respawn-failed-workers` enabled so Granian replaces a worker that exits unexpectedly.
 
@@ -89,7 +97,7 @@ continuous failure.
 
 Required env vars:
 
-- `WATCHDOG_HEALTH_URL` - service health endpoint, for example `http://127.0.0.1:8000/healthz`
+- `WATCHDOG_HEALTH_URL` - service health endpoint, for example `https://example.com/loader/healthz`
 - `WATCHDOG_RESTART_COMMAND` - shell command used to restart the service, for example `systemctl restart open-workshop-storage`
 
 Optional env vars:
@@ -101,15 +109,17 @@ Optional env vars:
 Example:
 
 ```bash
-WATCHDOG_HEALTH_URL="http://127.0.0.1:8000/healthz" \
-WATCHDOG_RESTART_COMMAND="systemctl restart open-workshop-storage" \
+WATCHDOG_HEALTH_URL="https://example.com/loader/healthz" \
+WATCHDOG_RESTART_COMMAND="systemctl restart open-workshop-loader" \
 python watchdog.py
 ```
 
 ### 6. Open the API docs
 
-- Swagger UI: `http://127.0.0.1:8000/`
-- OpenAPI JSON: `http://127.0.0.1:8000/openapi.json`
+- Distributor Swagger UI: `https://example.com/distributor/`
+- Distributor OpenAPI JSON: `https://example.com/distributor/openapi.json`
+- Loader Swagger UI: `https://example.com/loader/`
+- Loader OpenAPI JSON: `https://example.com/loader/openapi.json`
 
 ## Documentation
 
@@ -120,29 +130,33 @@ python watchdog.py
 
 ## API At A Glance
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` / `HEAD` | `/download/{type}/{path:path}` | Download stored files, with access-service validation for protected mod archives |
-| `POST` | `/upload` | Internal multipart upload endpoint for Manager |
-| `DELETE` | `/delete` | Internal delete endpoint for Manager |
-| `GET` / `POST` | `/transfer/start` | Start background download and repack flow from transfer JWT |
-| `POST` | `/transfer/upload` | Upload archive or image as raw body using transfer JWT |
-| `WS` | `/transfer/ws/{job_id}` | Subscribe to live transfer progress |
-| `POST` | `/transfer/repack` | Repack an already uploaded source file |
-| `POST` | `/transfer/move` | Move packed file to permanent storage |
+The paths below stay at their natural root locations. On a shared domain, keep only the docs and health
+endpoints behind service-specific prefixes, and leave the functional routes unchanged.
+
+| Service | Method | Path | Purpose |
+| --- | --- | --- | --- |
+| Distributor | `GET` / `HEAD` | `/download/{type}/{path:path}` | Download stored files, with access-service validation for protected mod archives |
+| Distributor | `POST` | `/blurhashes` | Generate BlurHash metadata for stored images |
+| Loader | `POST` | `/upload` | Internal multipart upload endpoint for Manager |
+| Loader | `DELETE` | `/delete` | Internal delete endpoint for Manager |
+| Loader | `GET` / `POST` | `/transfer/start` | Start background download and repack flow from transfer JWT |
+| Loader | `POST` | `/transfer/upload` | Upload archive or image as raw body using transfer JWT |
+| Loader | `WS` | `/transfer/ws/{job_id}` | Subscribe to live transfer progress |
+| Loader | `POST` | `/transfer/repack` | Repack an already uploaded source file |
+| Loader | `POST` | `/transfer/move` | Move packed file to permanent storage |
 
 Detailed request and response semantics: [docs/API.md](docs/API.md)
 
 ## Runtime Model
 
-Open Workshop Storage keeps active job state in memory and persists per-job metadata under
+The loader service keeps active job state in memory and persists per-job metadata under
 `<MAIN_DIR>/temp/<job_id>/meta.json`.
 
-That design keeps the code simple and fast for a single service instance, but it also means:
+That design keeps the loader code simple and fast, but it also means:
 
-- one process must own the whole lifecycle of a transfer job
-- WebSocket clients for a job must connect to the same process that started it
-- horizontal fan-out or multi-worker ASGI deployment needs a shared state layer before it becomes safe
+- one loader process must own the whole lifecycle of a transfer job
+- WebSocket clients for a job must connect to the same loader process that started it
+- horizontal fan-out or multi-worker loader deployment needs a shared state layer before it becomes safe
 
 More details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
@@ -154,6 +168,9 @@ src/open_workshop_storage/
 ├── core/               # shared state contracts and metadata helpers
 ├── observability/      # OpenTelemetry / Uptrace wiring
 ├── services/           # long-running transfer workflows
+├── distributor.py      # distributor app entrypoint
+├── loader.py           # loader app entrypoint
+├── service_factory.py  # shared app wiring and router cloning helpers
 └── utils/              # archive, auth, file, and image utilities
 ```
 

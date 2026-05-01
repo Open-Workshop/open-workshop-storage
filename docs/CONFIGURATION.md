@@ -33,6 +33,11 @@ cp ow_config_sample.py ow_config.py
 | `ACCESS_SERVICE_TIMEOUT_SECONDS` | yes | Timeout for access-service download checks |
 | `BLURHASH_CACHE_SIZE` | no | In-memory LRU cache size for computed BlurHash entries; default `100000` |
 
+### Service Ownership
+
+- Distributor service: `MAIN_DIR`, `ACCESS_SERVICE_URL`, `ACCESS_SERVICE_TIMEOUT_SECONDS`, `BLURHASH_CACHE_SIZE`
+- Loader service: `MAIN_DIR`, `MANAGER_URL`, `TRANSFER_JWT_SECRET`, `TRANSFER_*`, cleanup settings, and internal tokens
+
 ## Cleanup Settings
 
 | Setting | Default | Description |

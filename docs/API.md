@@ -2,8 +2,22 @@
 
 ## OpenAPI
 
-- Swagger UI: `/`
-- OpenAPI JSON: `/openapi.json`
+- Distributor Swagger UI: `/distributor/`
+- Distributor OpenAPI JSON: `/distributor/openapi.json`
+- Distributor health check: `/distributor/healthz`
+- Loader Swagger UI: `/loader/`
+- Loader OpenAPI JSON: `/loader/openapi.json`
+- Loader health check: `/loader/healthz`
+
+The loader and distributor entrypoints each expose their own OpenAPI document. The combined legacy
+`open_workshop_storage.app:app` entrypoint still exists, but the split apps are the recommended deployment model.
+When both services share one domain, only the docs and health endpoints are namespaced; the functional routes
+below stay at their natural root paths.
+
+## Service Split
+
+- Distributor service: `/distributor/healthz`, `/download/{type}/{path:path}`, `/blurhashes`
+- Loader service: `/loader/healthz`, `/upload`, `/delete`, and all `/transfer/*` endpoints
 
 ## Authentication Summary
 

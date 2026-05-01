@@ -2,14 +2,18 @@
 
 ## Overview
 
-Open Workshop Storage is a FastAPI service that acts as the storage and transfer backend for Open Workshop.
-It has two main responsibilities:
+Open Workshop Storage is implemented as two FastAPI entrypoints that share the same storage root and helper code.
+They expose different external responsibilities:
 
-- serve and manage files in permanent storage
-- execute transfer jobs that download, upload, repack, and move artifacts
+- `distributor` serves permanent files and blurhash metadata
+- `loader` executes transfer jobs, uploads, repacks, and storage maintenance actions
 
-The current design is intentionally single-process and single-worker. That is not an incidental deployment
-detail; it is part of the architecture.
+The loader side is intentionally single-process and single-worker. That is not an incidental deployment
+detail; it is part of the architecture because active transfer state lives in process memory.
+
+When both services are mounted on a single domain, use distinct path prefixes such as `/distributor` and
+`/loader` for the conflicting docs and health endpoints. The functional routes below remain root-relative,
+for example `/download/...`, `/upload`, and `/transfer/...`.
 
 ## Why Single Worker
 
@@ -37,7 +41,7 @@ events, and socket fan-out.
 
 ### `src/open_workshop_storage/app.py`
 
-Application bootstrap and runtime wiring:
+Legacy combined bootstrap and runtime wiring kept for compatibility:
 
 - creates the FastAPI app
 - enables telemetry
@@ -45,12 +49,36 @@ Application bootstrap and runtime wiring:
 - starts the cleanup loop in lifespan
 - provides the shared `ServiceContext`
 
+### `src/open_workshop_storage/loader.py`
+
+Loader service entrypoint:
+
+- exposes `/upload`, `/delete`, and all `/transfer/*` endpoints
+- owns transfer job progress, callbacks, and cleanup lifecycle
+- runs as a single worker process
+
+### `src/open_workshop_storage/distributor.py`
+
+Distributor service entrypoint:
+
+- exposes `/download/{type}/{path:path}` and `/blurhashes`
+- validates protected archive downloads through the access service
+- can be scaled independently from the loader side
+
+### `src/open_workshop_storage/service_factory.py`
+
+Shared app wiring:
+
+- installs request-scoped service context
+- clones routers into service-specific entrypoints
+- applies common CORS, telemetry, and health checks
+
 ### `src/open_workshop_storage/api/routes/`
 
 HTTP and WebSocket layer:
 
-- `files.py` handles stored file download, internal upload, and delete
-- `transfers.py` handles transfer orchestration endpoints and progress WebSocket
+- `files.py` contains the shared file endpoints used by both service entrypoints
+- `transfers.py` contains the loader-only transfer orchestration endpoints and progress WebSocket
 
 ### `src/open_workshop_storage/services/transfer_jobs.py`
 
@@ -105,7 +133,7 @@ Inside `MAIN_DIR` the service uses a predictable directory layout:
 
 ### URL-Based Transfer Flow
 
-Triggered by `GET` or `POST /transfer/start`.
+Triggered by `GET` or `POST /transfer/start` on the loader service.
 
 1. A client sends a transfer JWT with audience `storage`.
 2. The service validates `job_id`, `download_url`, and packing options.
@@ -118,7 +146,7 @@ Triggered by `GET` or `POST /transfer/start`.
 
 ### Raw Upload Transfer Flow
 
-Triggered by `POST /transfer/upload`.
+Triggered by `POST /transfer/upload` on the loader service.
 
 1. A client sends raw binary request body and a transfer JWT.
 2. The JWT describes whether the upload is an `archive` or `img` transfer.
@@ -130,7 +158,7 @@ Triggered by `POST /transfer/upload`.
 
 ### Maintenance Flow
 
-Manager can also operate on prepared jobs via:
+Manager can also operate on prepared jobs via the loader service:
 
 - `POST /transfer/repack`
 - `POST /transfer/move`
@@ -212,6 +240,6 @@ Additional protections:
 ## Operational Caveats
 
 - `7z` must be available in `PATH`.
-- this service should be deployed as a single worker
+- the loader service should be deployed as a single worker
 - CORS is permissive in the current middleware (`*`)
 - WebSocket progress depends on the job process staying alive

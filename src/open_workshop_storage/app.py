@@ -21,6 +21,7 @@ from .api.routes.transfers import router as transfer_router
 from .core.context import ServiceContext
 from .core.job_state import new_job_state, state_event_payload
 from .core.limits import ConcurrencyLimiter
+from .service_factory import ServiceContextMiddleware
 from .observability.uptrace import setup_uptrace_telemetry
 from .services.transfer_jobs import cleanup_loop, notify_manager, run_cleanup, run_download_job, run_repack_job
 
@@ -300,5 +301,6 @@ async def modify_header(request: Request, call_next):
 
 configure_transfer_routes(_build_service_context)
 configure_file_routes(_build_service_context)
+app.add_middleware(ServiceContextMiddleware, context_provider=_build_service_context)
 app.include_router(transfer_router)
 app.include_router(file_router)

@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from ...core.context import ServiceContext
 from ...services import access_client
+from ...service_factory import get_current_service_context
 from ...utils import image_file_to_blurhash
 
 router = APIRouter()
@@ -26,9 +27,12 @@ def configure_context_provider(provider: Callable[[], ServiceContext]) -> None:
 
 
 def _ctx() -> ServiceContext:
-    if _context_provider is None:
-        raise RuntimeError("file context provider is not configured")
-    return _context_provider()
+    try:
+        return get_current_service_context()
+    except RuntimeError:
+        if _context_provider is None:
+            raise RuntimeError("file context provider is not configured")
+        return _context_provider()
 
 
 def _client_host(request: Request) -> str:
