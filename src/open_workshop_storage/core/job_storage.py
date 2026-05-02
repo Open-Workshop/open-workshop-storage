@@ -38,16 +38,11 @@ class JobStorage:
         logger: logging.Logger,
         redis_url: str | None = None,
         redis_prefix: str = "open-workshop-storage",
-        blurhash_cache_ttl_seconds: int = 604800,
     ) -> None:
         self.state_cache = state_cache
         self.meta_cache = meta_cache
         self.logger = logger
         self.redis_prefix = redis_prefix or "open-workshop-storage"
-        try:
-            self.blurhash_cache_ttl_seconds = max(0, int(blurhash_cache_ttl_seconds))
-        except (TypeError, ValueError):
-            self.blurhash_cache_ttl_seconds = 604800
         self.instance_id = uuid.uuid4().hex
         self._lock = asyncio.Lock()
         self._redis = None
@@ -77,8 +72,9 @@ class JobStorage:
     def _events_channel(self) -> str:
         return f"{self.redis_prefix}:jobs:events"
 
-    def _blurhash_key(self, cache_key: str) -> str:
-        return f"{self.redis_prefix}:blurhash:{cache_key}"
+    @property
+    def redis(self) -> Any | None:
+        return self._redis
 
     async def close(self) -> None:
         if self._redis is None:
@@ -187,29 +183,6 @@ class JobStorage:
             self.meta_cache[job_id] = snapshot
         await self._write_remote_meta(job_id, snapshot)
 
-    async def read_blurhash_cache(self, cache_key: str) -> JsonDict | None:
-        if self._redis is None:
-            return None
-        raw_value = await self._redis.get(self._blurhash_key(cache_key))
-        if not raw_value:
-            return None
-        try:
-            loaded = json.loads(raw_value)
-        except Exception:
-            self.logger.warning("failed to decode redis blurhash cache entry cache_key=%s", cache_key)
-            return None
-        return loaded if isinstance(loaded, dict) else None
-
-    async def write_blurhash_cache(self, cache_key: str, data: JsonDict) -> None:
-        if self._redis is None:
-            return
-        payload = json.dumps(dict(data), ensure_ascii=True)
-        key = self._blurhash_key(cache_key)
-        if self.blurhash_cache_ttl_seconds > 0:
-            await self._redis.set(key, payload, ex=self.blurhash_cache_ttl_seconds)
-        else:
-            await self._redis.set(key, payload)
-
     async def delete_job(self, job_id: str) -> None:
         async with self._lock:
             self.state_cache.pop(job_id, None)
@@ -296,7 +269,6 @@ def build_job_storage(
     logger: logging.Logger,
     redis_url: str | None = None,
     redis_prefix: str = "open-workshop-storage",
-    blurhash_cache_ttl_seconds: int = 604800,
 ) -> JobStorage:
     return JobStorage(
         state_cache=state_cache,
@@ -304,5 +276,4 @@ def build_job_storage(
         logger=logger,
         redis_url=redis_url,
         redis_prefix=redis_prefix,
-        blurhash_cache_ttl_seconds=blurhash_cache_ttl_seconds,
     )

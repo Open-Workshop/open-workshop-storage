@@ -12,11 +12,7 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
-from ...core.blurhash_cache import (
-    build_blurhash_cache_key,
-    decode_blurhash_cache_value,
-    encode_blurhash_cache_value,
-)
+from ...core.blurhash_service import get_or_compute_blurhash_for_key
 from ...core.context import ServiceContext
 from ...services import access_client
 from ...service_factory import get_current_service_context
@@ -150,31 +146,7 @@ async def _compute_blurhash_for_key(
     ctx: ServiceContext,
     key: tuple[str, int, int],
 ) -> Optional[tuple[str, int, int]]:
-    real_path, mtime_ns, size = key
-    cache_key = build_blurhash_cache_key(real_path, mtime_ns, size)
-    try:
-        cache_data = await ctx.read_blurhash_cache(cache_key)
-    except Exception:
-        ctx.logger.debug("blurhash redis cache read failed cache_key=%s", cache_key, exc_info=True)
-        cache_data = None
-    if cache_data is not None:
-        cached = decode_blurhash_cache_value(cache_data)
-        if cached is not None:
-            return cached
-    try:
-        result = await anyio.to_thread.run_sync(
-            _blurhash_for_file,
-            real_path,
-            mtime_ns,
-            size,
-        )
-    except (OSError, ValueError):
-        return None
-    try:
-        await ctx.write_blurhash_cache(cache_key, encode_blurhash_cache_value(*result))
-    except Exception:
-        ctx.logger.debug("blurhash redis cache write failed cache_key=%s", cache_key, exc_info=True)
-    return result
+    return await get_or_compute_blurhash_for_key(ctx, key, _blurhash_for_file)
 
 
 @router.post(

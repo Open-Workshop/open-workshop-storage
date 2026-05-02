@@ -18,6 +18,7 @@ from .api.routes.files import router as file_router
 from .api.routes.transfers import configure_context_provider as configure_transfer_routes
 from .api.routes.transfers import router as transfer_router
 from .core.context import ServiceContext
+from .core.blurhash_store import build_blurhash_cache_store
 from .core.job_state import new_job_state, state_event_payload
 from .core.job_storage import build_job_storage
 from .core.limits import ConcurrencyLimiter
@@ -52,7 +53,12 @@ JOB_STORAGE = build_job_storage(
     logger=logger,
     redis_url=REDIS_URL,
     redis_prefix=REDIS_PREFIX,
-    blurhash_cache_ttl_seconds=BLURHASH_CACHE_TTL_SECONDS,
+)
+BLURHASH_CACHE = build_blurhash_cache_store(
+    storage=JOB_STORAGE,
+    logger=logger,
+    redis_prefix=REDIS_PREFIX,
+    ttl_seconds=BLURHASH_CACHE_TTL_SECONDS,
 )
 
 
@@ -137,11 +143,11 @@ async def _write_meta(job_id: str, data: dict[str, Any]) -> None:
 
 
 async def _read_blurhash_cache(cache_key: str) -> dict[str, Any] | None:
-    return await JOB_STORAGE.read_blurhash_cache(cache_key)
+    return await BLURHASH_CACHE.read(cache_key)
 
 
 async def _write_blurhash_cache(cache_key: str, data: dict[str, Any]) -> None:
-    await JOB_STORAGE.write_blurhash_cache(cache_key, data)
+    await BLURHASH_CACHE.write(cache_key, data)
 
 
 def _read_meta_sync(job_id: str) -> dict[str, Any] | None:
