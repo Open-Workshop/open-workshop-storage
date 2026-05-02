@@ -1,6 +1,7 @@
 bcrypt
 fastapi[standard]
 aiohttp
+redis>=5.0
 granian
 anyio
 PyJWT

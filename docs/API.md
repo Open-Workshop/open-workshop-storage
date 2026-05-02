@@ -148,6 +148,7 @@ Generates BlurHash strings for a batch of stored image URLs or storage-relative 
 - response preserves request order
 - repeated identical file targets inside one batch are computed once and reused
 - computed blurhash values are kept in an in-memory LRU cache, default size `100000`
+- when `REDIS_URL` is configured, computed blurhash values are also shared through Redis with a TTL-based cache entry, so other workers can reuse them without recomputing
 
 ### Common responses
 
@@ -315,7 +316,7 @@ Move the packed artifact from temp storage to permanent storage.
 
 - moves the packed file to the target storage root
 - records final path and size in metadata
-- clears the in-memory job state and closes any remaining websocket subscribers
+- clears the Redis-backed job state and closes any remaining websocket subscribers
 - removes the temp job directory afterwards
 
 ### Responses

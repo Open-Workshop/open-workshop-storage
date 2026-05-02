@@ -8,34 +8,36 @@ They expose different external responsibilities:
 - `distributor` serves permanent files and blurhash metadata
 - `loader` executes transfer jobs, uploads, repacks, and storage maintenance actions
 
-The loader side is intentionally single-process and single-worker. That is not an incidental deployment
-detail; it is part of the architecture because active transfer state lives in process memory.
+The loader side now keeps active transfer state, job metadata, and websocket fan-out behind Redis when
+`REDIS_URL` is configured. That lets the loader run with multiple workers while keeping a local cache only
+for active websocket clients and in-flight work. If Redis is omitted, the code falls back to an in-memory
+store for development and tests.
+
+The distributor side keeps a local BlurHash LRU cache for fast repeat hits inside one process, and when
+Redis is configured it also writes shared BlurHash results into Redis so other workers can reuse them.
+That keeps the distributor fast while avoiding duplicate image hashing across processes.
 
 When both services are mounted on a single domain, use distinct path prefixes such as `/distributor` and
 `/loader` for the conflicting docs and health endpoints. The functional routes below remain root-relative,
 for example `/download/...`, `/upload`, and `/transfer/...`.
 
-## Why Single Worker
+## Why Redis
 
-Active transfer state is stored in the in-memory `JOB_STATE` dictionary inside
-`src/open_workshop_storage/app.py`.
+Redis is the shared source of truth for active transfer jobs when configured.
 
-That state contains:
+That shared state contains:
 
 - current status and stage
 - byte counters
 - optional archive progress percent
-- active WebSocket connections for the job
-- last activity timestamps used by cleanup
+- metadata used by transfer maintenance endpoints
+- active job identifiers for cleanup
 
-Because this state is process-local:
+The local process still keeps websocket connections and a small cache in memory, but that cache is now
+replicated from Redis events rather than being the authority.
 
-- a second worker would not see jobs started by the first worker
-- WebSocket progress would become inconsistent across workers
-- cleanup and callbacks could race or miss active jobs
-
-If multi-worker or horizontal scaling is ever required, the project will first need shared state for jobs,
-events, and socket fan-out.
+BlurHash cache entries are also stored in Redis when available, but they remain an optimization rather
+than the source of truth because the local in-process LRU cache still serves same-worker repeat requests.
 
 ## Main Components
 
@@ -45,8 +47,8 @@ Legacy combined bootstrap and runtime wiring kept for compatibility:
 
 - creates the FastAPI app
 - enables telemetry
-- owns `JOB_STATE` and `JOB_LOCK`
-- starts the cleanup loop in lifespan
+- owns the local job caches and Redis-backed storage helpers
+- starts the cleanup loop and Redis event listener in lifespan
 - provides the shared `ServiceContext`
 
 ### `src/open_workshop_storage/loader.py`
@@ -55,7 +57,7 @@ Loader service entrypoint:
 
 - exposes `/upload`, `/delete`, and all `/transfer/*` endpoints
 - owns transfer job progress, callbacks, and cleanup lifecycle
-- runs as a single worker process
+- can run with multiple workers when Redis is configured
 
 ### `src/open_workshop_storage/distributor.py`
 
@@ -117,7 +119,6 @@ Inside `MAIN_DIR` the service uses a predictable directory layout:
 ├── resource/           # permanent generic resources
 └── temp/
     └── <job_id>/       # transient transfer workspace
-        ├── meta.json
         ├── source.zip / upload.img / ...
         ├── repack/
         └── packed.zip / packed.webp
@@ -137,7 +138,7 @@ Triggered by `GET` or `POST /transfer/start` on the loader service.
 
 1. A client sends a transfer JWT with audience `storage`.
 2. The service validates `job_id`, `download_url`, and packing options.
-3. Job metadata is created under `temp/<job_id>/meta.json`.
+3. Job metadata is written to Redis under job-specific keys.
 4. A background task downloads the source file.
 5. The service emits progress updates through WebSocket.
 6. The downloaded archive is inspected with `7z`.
@@ -184,7 +185,7 @@ For archive jobs, `percent` is meaningful during `extracting` and `repacking`.
 
 ## Metadata Model
 
-Each job has a `meta.json` file in its temp directory. Depending on the flow, it may contain:
+Each job has a Redis metadata record. Depending on the flow, it may contain:
 
 - source file information
 - packing configuration
@@ -194,8 +195,8 @@ Each job has a `meta.json` file in its temp directory. Depending on the flow, it
 - timestamps for creation, completion, and move
 - error state
 
-This metadata is useful for maintenance endpoints and debugging, but it is not a replacement for distributed
-job storage.
+This metadata is useful for maintenance endpoints and debugging, and Redis makes it safe to read from any
+worker process.
 
 ## Manager Integration
 
@@ -219,9 +220,9 @@ The cleanup loop runs every `CLEANUP_INTERVAL_SECONDS` seconds.
 
 It removes:
 
-- completed jobs from memory immediately after `POST /transfer/move` finalizes the transfer
-- inactive jobs from memory when their `last_activity` exceeds `JOB_TTL_SECONDS`
-- stale temp directories on disk that no longer have active in-memory state
+- completed jobs from Redis and the local cache immediately after `POST /transfer/move` finalizes the transfer
+- inactive jobs from Redis and the local cache when their `last_activity` exceeds `JOB_TTL_SECONDS`
+- stale temp directories on disk that no longer have active state in Redis or the local cache
 
 ## Security Model
 
@@ -240,6 +241,6 @@ Additional protections:
 ## Operational Caveats
 
 - `7z` must be available in `PATH`.
-- the loader service should be deployed as a single worker
+- the loader service can be deployed with multiple workers when Redis is configured
 - CORS is permissive in the current middleware (`*`)
-- WebSocket progress depends on the job process staying alive
+- websocket progress depends on the Redis event listener staying healthy

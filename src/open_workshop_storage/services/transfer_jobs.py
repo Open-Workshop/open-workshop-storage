@@ -44,12 +44,17 @@ async def run_cleanup(ctx: ServiceContext) -> None:
     now = time.time()
     cleanup_threshold = getattr(ctx.config, "JOB_TTL_SECONDS", 10800)
 
+    active_job_ids = set(await ctx.list_job_ids())
+    local_job_ids = set(ctx.job_state.keys())
+    job_ids = active_job_ids | local_job_ids
     jobs_to_remove: list[str] = []
-    async with ctx.job_lock:
-        for job_id, state in list(ctx.job_state.items()):
-            last_activity = state.get("last_activity", 0)
-            if now - last_activity >= cleanup_threshold:
-                jobs_to_remove.append(job_id)
+    for job_id in job_ids:
+        state = await ctx.read_job_state(job_id)
+        if state is None:
+            continue
+        last_activity = state.get("last_activity", 0)
+        if now - last_activity >= cleanup_threshold:
+            jobs_to_remove.append(job_id)
 
     for job_id in jobs_to_remove:
         await ctx.delete_job_and_dir(job_id)
@@ -61,7 +66,7 @@ async def run_cleanup(ctx: ServiceContext) -> None:
                 job_path = os.path.join(ctx.temp_dir, job_folder)
                 if not os.path.isdir(job_path):
                     continue
-                if job_folder not in ctx.job_state:
+                if job_folder not in job_ids:
                     try:
                         mod_time = os.path.getmtime(job_path)
                         if now - mod_time >= cleanup_threshold:
@@ -85,10 +90,9 @@ async def cleanup_loop(ctx: ServiceContext) -> None:
 
 async def _broadcast_progress(ctx: ServiceContext, job_id: str, stage: str, percent: int) -> None:
     percent = max(0, min(100, int(percent)))
+    await ctx.set_state(job_id, stage=stage, percent=percent)
     async with ctx.job_lock:
         state = ctx.job_state.setdefault(job_id, ctx.new_job_state())
-        state["stage"] = stage
-        state["percent"] = percent
         snapshot = state_event_payload("progress", state)
     await ctx.broadcast(job_id, snapshot)
 

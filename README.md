@@ -11,9 +11,12 @@ Open Workshop Storage is split into two outward-facing services that share the s
 - `distributor` serves stored files and blurhash metadata
 - `loader` ingests uploads, runs transfer jobs, repacks artifacts, and reports completion back to Manager
 
-The loader side still uses a single-worker runtime because it owns in-memory transfer state and WebSocket
-fan-out. The distributor side is stateless apart from its in-memory BlurHash cache and can be scaled
-independently.
+The loader side now keeps active transfer state and websocket fan-out behind Redis, so it can run with
+multiple workers when `REDIS_URL` is configured. If Redis is omitted, the project falls back to local
+in-memory state for development and tests. The distributor side is stateless apart from its in-memory
+BlurHash LRU cache, and when Redis is configured it also shares BlurHash results across workers with a
+TTL-based cache entry. That lets the distributor scale independently without recomputing the same image
+hashes in each process.
 
 When both services are published on the same domain, only the conflicting control endpoints need separate
 prefixes. In practice that means docs and health URLs live under `/distributor/...` and `/loader/...`,
@@ -23,7 +26,7 @@ while business routes like `/download/...`, `/upload`, and `/transfer/...` stay 
 
 - FastAPI applications served with Granian.
 - Separate loader and distributor entrypoints for clearer service boundaries.
-- Loader runtime designed around in-memory job state and WebSocket progress.
+- Loader runtime designed around Redis-backed job state and WebSocket progress fan-out.
 - Protected archive downloads with access-service validation.
 - Transfer pipeline for remote downloads and direct raw-body uploads.
 - Archive repacking with `7z`, encrypted ZIP rejection, and unpacked-size heuristics.
@@ -61,6 +64,7 @@ Then fill at least:
 - `MANAGER_URL`
 - `ACCESS_SERVICE_URL`
 - `TRANSFER_JWT_SECRET`
+- `REDIS_URL` if you want shared loader state, shared BlurHash cache, or multiple workers
 - token values in `ow_config.py`
 
 Configuration details: [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
@@ -82,12 +86,13 @@ granian --working-dir src --interface asgi --host 127.0.0.1 --port 8000 open_wor
 Loader:
 
 ```bash
-granian --working-dir src --interface asgi --host 127.0.0.1 --port 8001 --workers 1 --respawn-failed-workers --access-log open_workshop_storage.loader:app
+granian --working-dir src --interface asgi --host 127.0.0.1 --port 8001 --respawn-failed-workers --access-log open_workshop_storage.loader:app
 ```
 
-The loader service is expected to run as a single worker process. Multi-worker deployment is not supported by the
-current architecture because active transfer state lives in process memory. Production runs should keep
-`--respawn-failed-workers` enabled so Granian replaces a worker that exits unexpectedly.
+The loader service can run with multiple workers when Redis is configured. Without Redis it falls back to
+single-process in-memory state, which is still useful for local development and test runs. Production runs
+can add `--workers N` as needed and should keep `--respawn-failed-workers` enabled so Granian replaces a
+worker that exits unexpectedly.
 
 ## Watchdog
 
@@ -149,14 +154,14 @@ Detailed request and response semantics: [docs/API.md](docs/API.md)
 
 ## Runtime Model
 
-The loader service keeps active job state in memory and persists per-job metadata under
-`<MAIN_DIR>/temp/<job_id>/meta.json`.
+The loader service keeps active job state in Redis and uses the local process only as a cache for active
+connections and in-flight work. Per-job files still live under `<MAIN_DIR>/temp/<job_id>/`.
 
 That design keeps the loader code simple and fast, but it also means:
 
-- one loader process must own the whole lifecycle of a transfer job
-- WebSocket clients for a job must connect to the same loader process that started it
-- horizontal fan-out or multi-worker loader deployment needs a shared state layer before it becomes safe
+- Redis must be reachable for shared job state and websocket fan-out
+- temp files still live on the shared storage path under `MAIN_DIR`
+- local websocket connections are still tied to the process that accepted them
 
 More details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 

@@ -31,10 +31,10 @@ def base83_encode(value: int, length: int) -> str:
 
 
 def srgb_to_linear(value: int) -> float:
-    value = float(value) / 255.0
-    if value <= 0.04045:
-        return value / 12.92
-    return math.pow((value + 0.055) / 1.055, 2.4)
+    scaled = float(value) / 255.0
+    if scaled <= 0.04045:
+        return scaled / 12.92
+    return math.pow((scaled + 0.055) / 1.055, 2.4)
 
 
 def sign_pow(value: float, exp: float) -> float:

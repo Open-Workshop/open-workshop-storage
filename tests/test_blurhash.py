@@ -40,6 +40,18 @@ def _load_main_module(temp_dir: str):
 
 
 class BlurhashEndpointTests(unittest.TestCase):
+    class _FakeRedis:
+        def __init__(self) -> None:
+            self.values: dict[str, str] = {}
+            self.set_calls: list[tuple[str, str, int | None]] = []
+
+        async def get(self, key: str) -> str | None:
+            return self.values.get(key)
+
+        async def set(self, key: str, value: str, ex: int | None = None) -> None:
+            self.values[key] = value
+            self.set_calls.append((key, value, ex))
+
     def test_blurhash_batch_generates_hashes_for_download_urls(self):
         with TemporaryDirectory() as temp_dir:
             main = _load_main_module(temp_dir)
@@ -97,6 +109,48 @@ class BlurhashEndpointTests(unittest.TestCase):
             finally:
                 files.image_file_to_blurhash = original
                 files._blurhash_for_file.cache_clear()
+
+    def test_blurhash_batch_uses_redis_cache_across_lru_resets(self):
+        with TemporaryDirectory() as temp_dir:
+            main = _load_main_module(temp_dir)
+            import open_workshop_storage.api.routes.files as files
+
+            image_path = Path(main.MAIN_DIR) / "resource" / "mods" / "123" / "logo.png"
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (6, 4), (255, 64, 0)).save(image_path, format="PNG")
+
+            fake_redis = self._FakeRedis()
+            original_redis = main.JOB_STORAGE._redis
+            main.JOB_STORAGE._redis = fake_redis
+
+            files._blurhash_for_file.cache_clear()
+            original = files.image_file_to_blurhash
+            call_count = {"value": 0}
+
+            def fake_image_file_to_blurhash(*args, **kwargs):
+                call_count["value"] += 1
+                return original(*args, **kwargs)
+
+            files.image_file_to_blurhash = fake_image_file_to_blurhash
+            try:
+                source_url = "https://storage.openworkshop.miskler.ru/download/resource/mods/123/logo.png"
+                with TestClient(main.app) as client:
+                    first = client.post("/blurhashes", json={"paths": [source_url]})
+                    self.assertEqual(first.status_code, 200)
+
+                    files._blurhash_for_file.cache_clear()
+
+                    second = client.post("/blurhashes", json={"paths": [source_url]})
+                    self.assertEqual(second.status_code, 200)
+
+                self.assertEqual(call_count["value"], 1)
+                self.assertEqual(len(fake_redis.set_calls), 1)
+                self.assertEqual(fake_redis.set_calls[0][2], 604800)
+                self.assertEqual(first.json()["items"][0]["blurhash"], second.json()["items"][0]["blurhash"])
+            finally:
+                files.image_file_to_blurhash = original
+                files._blurhash_for_file.cache_clear()
+                main.JOB_STORAGE._redis = original_redis
 
     def test_blurhash_batch_deduplicates_repeated_paths_in_one_request(self):
         with TemporaryDirectory() as temp_dir:

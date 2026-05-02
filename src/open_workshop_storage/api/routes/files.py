@@ -12,6 +12,11 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+from ...core.blurhash_cache import (
+    build_blurhash_cache_key,
+    decode_blurhash_cache_value,
+    encode_blurhash_cache_value,
+)
 from ...core.context import ServiceContext
 from ...services import access_client
 from ...service_factory import get_current_service_context
@@ -141,10 +146,23 @@ def _prepare_blurhash_item(
     return item, (real_path, stat_result.st_mtime_ns, stat_result.st_size)
 
 
-async def _compute_blurhash_for_key(key: tuple[str, int, int]) -> Optional[tuple[str, int, int]]:
+async def _compute_blurhash_for_key(
+    ctx: ServiceContext,
+    key: tuple[str, int, int],
+) -> Optional[tuple[str, int, int]]:
     real_path, mtime_ns, size = key
+    cache_key = build_blurhash_cache_key(real_path, mtime_ns, size)
     try:
-        return await anyio.to_thread.run_sync(
+        cache_data = await ctx.read_blurhash_cache(cache_key)
+    except Exception:
+        ctx.logger.debug("blurhash redis cache read failed cache_key=%s", cache_key, exc_info=True)
+        cache_data = None
+    if cache_data is not None:
+        cached = decode_blurhash_cache_value(cache_data)
+        if cached is not None:
+            return cached
+    try:
+        result = await anyio.to_thread.run_sync(
             _blurhash_for_file,
             real_path,
             mtime_ns,
@@ -152,6 +170,11 @@ async def _compute_blurhash_for_key(key: tuple[str, int, int]) -> Optional[tuple
         )
     except (OSError, ValueError):
         return None
+    try:
+        await ctx.write_blurhash_cache(cache_key, encode_blurhash_cache_value(*result))
+    except Exception:
+        ctx.logger.debug("blurhash redis cache write failed cache_key=%s", cache_key, exc_info=True)
+    return result
 
 
 @router.post(
@@ -180,7 +203,7 @@ async def blurhashes(request: Request, payload: BlurhashBatchRequest) -> Blurhas
     blurhash_results: dict[tuple[str, int, int], Optional[tuple[str, int, int]]] = {}
 
     if unique_keys:
-        computed = await asyncio.gather(*(_compute_blurhash_for_key(key) for key in unique_keys))
+        computed = await asyncio.gather(*(_compute_blurhash_for_key(ctx, key) for key in unique_keys))
         blurhash_results = {key: result for key, result in zip(unique_keys, computed)}
 
     items: list[BlurhashItemRead] = []

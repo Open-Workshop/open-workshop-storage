@@ -23,6 +23,7 @@ class ServiceContext:
     temp_dir: str
     tools: Any
     job_state: dict[str, JobState]
+    job_meta: dict[str, JsonDict]
     job_lock: asyncio.Lock
     upload_limiter: ConcurrencyLimiter
     download_limiter: ConcurrencyLimiter
@@ -30,7 +31,14 @@ class ServiceContext:
     progress_push_interval: float
     new_job_state: Callable[[], JobState]
     job_dir: Callable[[str], str]
-    read_meta_sync: Callable[[str], JsonDict]
+    read_job_state: Callable[[str], Awaitable[JobState | None]]
+    save_job_state: Callable[[str, JobState | None], Awaitable[JobState]]
+    list_job_ids: Callable[[], Awaitable[list[str]]]
+    read_meta: Callable[[str], Awaitable[JsonDict | None]]
+    write_meta: Callable[[str, JsonDict], Awaitable[None]]
+    read_blurhash_cache: Callable[[str], Awaitable[JsonDict | None]]
+    write_blurhash_cache: Callable[[str, JsonDict], Awaitable[None]]
+    read_meta_sync: Callable[[str], JsonDict | None]
     write_meta_sync: Callable[[str, JsonDict], None]
     build_state_event: Callable[..., Awaitable[JsonDict]]
     broadcast: Callable[[str, JsonDict], Awaitable[None]]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from typing import Any, cast
 
 from PIL import Image, UnidentifiedImageError
 
@@ -53,7 +54,7 @@ def image_bytes_to_blurhash(
 
         if max(rgb.size) > max_dimension:
             rgb = rgb.copy()
-            rgb.thumbnail((max_dimension, max_dimension), _RESAMPLE_LANCZOS)
+            rgb.thumbnail((max_dimension, max_dimension), cast(Any, _RESAMPLE_LANCZOS))
 
         pixels = list(rgb.getdata())
         rows = [

@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import os
 import shutil
@@ -20,6 +19,7 @@ from .api.routes.transfers import configure_context_provider as configure_transf
 from .api.routes.transfers import router as transfer_router
 from .core.context import ServiceContext
 from .core.job_state import new_job_state, state_event_payload
+from .core.job_storage import build_job_storage
 from .core.limits import ConcurrencyLimiter
 from .service_factory import ServiceContextMiddleware
 from .observability.uptrace import setup_uptrace_telemetry
@@ -29,11 +29,6 @@ MAIN_DIR = config.MAIN_DIR
 MANAGER_URL = config.MANAGER_URL
 logger = logging.getLogger("open_workshop.storage")
 
-TEMP_DIR = os.path.join(MAIN_DIR, "temp")
-JOB_STATE: dict[str, dict[str, Any]] = {}
-JOB_LOCK = asyncio.Lock()
-PROGRESS_PUSH_INTERVAL = 0.25
-
 
 def _read_non_negative_int_setting(name: str, default: int) -> int:
     raw_value = getattr(config, name, default)
@@ -41,6 +36,24 @@ def _read_non_negative_int_setting(name: str, default: int) -> int:
         return max(0, int(raw_value))
     except (TypeError, ValueError):
         return max(0, int(default))
+
+
+TEMP_DIR = os.path.join(MAIN_DIR, "temp")
+JOB_STATE: dict[str, dict[str, Any]] = {}
+JOB_META: dict[str, dict[str, Any]] = {}
+JOB_LOCK = asyncio.Lock()
+PROGRESS_PUSH_INTERVAL = 0.25
+REDIS_URL = getattr(config, "REDIS_URL", None) or None
+REDIS_PREFIX = getattr(config, "REDIS_PREFIX", "open-workshop-storage")
+BLURHASH_CACHE_TTL_SECONDS = _read_non_negative_int_setting("BLURHASH_CACHE_TTL_SECONDS", 604800)
+JOB_STORAGE = build_job_storage(
+    state_cache=JOB_STATE,
+    meta_cache=JOB_META,
+    logger=logger,
+    redis_url=REDIS_URL,
+    redis_prefix=REDIS_PREFIX,
+    blurhash_cache_ttl_seconds=BLURHASH_CACHE_TTL_SECONDS,
+)
 
 
 UPLOAD_LIMITER = ConcurrencyLimiter(_read_non_negative_int_setting("TRANSFER_UPLOAD_CONCURRENCY", 8))
@@ -60,6 +73,7 @@ async def lifespan(_app: FastAPI):
         logger.error("7z dependency missing: %s", exc)
         raise
 
+    await _start_job_event_listener()
     cleanup_task = asyncio.create_task(_cleanup_loop())
     try:
         yield
@@ -67,6 +81,7 @@ async def lifespan(_app: FastAPI):
         cleanup_task.cancel()
         with suppress(asyncio.CancelledError):
             await cleanup_task
+        await _stop_job_event_listener()
 
 
 app = FastAPI(
@@ -101,19 +116,40 @@ def _job_dir(job_id: str) -> str:
     return tools.safe_path(TEMP_DIR, job_id)
 
 
-def _job_meta_path(job_id: str) -> str:
-    return os.path.join(_job_dir(job_id), "meta.json")
+async def _read_job_state(job_id: str) -> dict[str, Any] | None:
+    return await JOB_STORAGE.read_state(job_id)
 
 
-def _read_meta_sync(job_id: str) -> dict[str, Any]:
-    with open(_job_meta_path(job_id), "r", encoding="utf-8") as meta_file:
-        return json.load(meta_file)
+async def _save_job_state(job_id: str, state: dict[str, Any] | None = None) -> dict[str, Any]:
+    return await JOB_STORAGE.save_state(job_id, state)
+
+
+async def _list_job_ids() -> list[str]:
+    return await JOB_STORAGE.list_job_ids()
+
+
+async def _read_meta(job_id: str) -> dict[str, Any] | None:
+    return await JOB_STORAGE.read_meta(job_id)
+
+
+async def _write_meta(job_id: str, data: dict[str, Any]) -> None:
+    await JOB_STORAGE.write_meta(job_id, data)
+
+
+async def _read_blurhash_cache(cache_key: str) -> dict[str, Any] | None:
+    return await JOB_STORAGE.read_blurhash_cache(cache_key)
+
+
+async def _write_blurhash_cache(cache_key: str, data: dict[str, Any]) -> None:
+    await JOB_STORAGE.write_blurhash_cache(cache_key, data)
+
+
+def _read_meta_sync(job_id: str) -> dict[str, Any] | None:
+    return anyio.run(_read_meta, job_id)
 
 
 def _write_meta_sync(job_id: str, data: dict[str, Any]) -> None:
-    os.makedirs(_job_dir(job_id), exist_ok=True)
-    with open(_job_meta_path(job_id), "w", encoding="utf-8") as meta_file:
-        json.dump(data, meta_file, ensure_ascii=True)
+    anyio.run(_write_meta, job_id, data)
 
 
 def _state_event_payload(
@@ -130,7 +166,7 @@ async def _build_state_event(job_id: str, event: str, **extra: Any) -> dict[str,
         return _state_event_payload(event, state, **extra)
 
 
-async def _broadcast(job_id: str, message: dict[str, Any]) -> None:
+async def _deliver_local_message(job_id: str, message: dict[str, Any]) -> None:
     async with JOB_LOCK:
         state = JOB_STATE.get(job_id)
         if not state:
@@ -152,7 +188,12 @@ async def _broadcast(job_id: str, message: dict[str, Any]) -> None:
                 state["clients"] = [ws for ws in state.get("clients", []) if ws not in dead_clients]
 
 
-async def _close_clients(job_id: str) -> None:
+async def _broadcast(job_id: str, message: dict[str, Any]) -> None:
+    await _deliver_local_message(job_id, message)
+    await JOB_STORAGE.publish_event(job_id, message)
+
+
+async def _close_local_clients(job_id: str) -> None:
     async with JOB_LOCK:
         state = JOB_STATE.get(job_id)
         if not state:
@@ -166,36 +207,47 @@ async def _close_clients(job_id: str) -> None:
             pass
 
 
+async def _close_clients(job_id: str) -> None:
+    await _close_local_clients(job_id)
+    await JOB_STORAGE.publish_close_clients(job_id)
+
+
 async def _set_state(job_id: str, **updates: Any) -> None:
+    state = await JOB_STORAGE.read_state(job_id)
     async with JOB_LOCK:
-        state = JOB_STATE.setdefault(job_id, _new_job_state())
+        if state is None:
+            state = JOB_STATE.setdefault(job_id, _new_job_state())
+        else:
+            state = JOB_STATE.setdefault(job_id, state)
         updates["last_activity"] = time.time()
         state.update(updates)
+    await JOB_STORAGE.save_state(job_id, state)
 
 
 async def _set_stage(job_id: str, stage: str) -> None:
+    state = await JOB_STORAGE.read_state(job_id)
     async with JOB_LOCK:
-        state = JOB_STATE.setdefault(job_id, _new_job_state())
+        if state is None:
+            state = JOB_STATE.setdefault(job_id, _new_job_state())
+        else:
+            state = JOB_STATE.setdefault(job_id, state)
         state["stage"] = stage
         state["percent"] = None
         state["last_activity"] = time.time()
         payload = _state_event_payload("stage", state)
+    await JOB_STORAGE.save_state(job_id, state)
     await _broadcast(job_id, payload)
 
 
 async def _delete_job_and_dir(job_id: str) -> None:
+    await _close_local_clients(job_id)
+    await JOB_STORAGE.delete_job(job_id)
+    await JOB_STORAGE.publish_delete(job_id)
+
     async with JOB_LOCK:
         state = JOB_STATE.get(job_id)
-        clients_to_close = []
-        if state:
-            clients_to_close = list(state.get("clients", []))
-            del JOB_STATE[job_id]
-
-    for ws in clients_to_close:
-        try:
-            await ws.close()
-        except Exception:
-            pass
+        if state and not state.get("clients"):
+            JOB_STATE.pop(job_id, None)
 
     try:
         job_dir = _job_dir(job_id)
@@ -210,6 +262,88 @@ async def _job_error_cleanup(job_id: str, reason: str) -> None:
     await _delete_job_and_dir(job_id)
 
 
+async def _merge_remote_state(job_id: str, remote_state: dict[str, Any] | None) -> None:
+    if remote_state is None:
+        return
+    async with JOB_LOCK:
+        local_state = JOB_STATE.get(job_id)
+        if local_state is None:
+            local_state = _new_job_state()
+            JOB_STATE[job_id] = local_state
+        clients = list(local_state.get("clients", []))
+        local_state.clear()
+        local_state.update(_new_job_state())
+        local_state.update({key: value for key, value in remote_state.items() if key != "clients"})
+        local_state["clients"] = clients
+
+
+async def _remove_local_job(job_id: str) -> None:
+    async with JOB_LOCK:
+        state = JOB_STATE.pop(job_id, None)
+        JOB_META.pop(job_id, None)
+        clients = list(state.get("clients", [])) if state else []
+    for ws in clients:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
+async def _handle_remote_event(payload: dict[str, Any]) -> None:
+    if payload.get("origin_id") == JOB_STORAGE.instance_id:
+        return
+
+    job_id = str(payload.get("job_id", ""))
+    if not job_id:
+        return
+
+    kind = payload.get("kind")
+    if kind == "event":
+        await _merge_remote_state(job_id, payload.get("state") if isinstance(payload.get("state"), dict) else None)
+        message = payload.get("message")
+        if isinstance(message, dict):
+            await _deliver_local_message(job_id, message)
+        return
+
+    if kind == "close_clients":
+        await _close_local_clients(job_id)
+        return
+
+    if kind == "delete":
+        await _remove_local_job(job_id)
+
+
+_JOB_EVENT_LISTENER_TASK: asyncio.Task[None] | None = None
+_JOB_EVENT_LISTENER_USERS = 0
+_JOB_EVENT_LISTENER_LOCK = asyncio.Lock()
+
+
+async def _start_job_event_listener() -> None:
+    global _JOB_EVENT_LISTENER_TASK, _JOB_EVENT_LISTENER_USERS
+    async with _JOB_EVENT_LISTENER_LOCK:
+        _JOB_EVENT_LISTENER_USERS += 1
+        if not JOB_STORAGE.supports_pubsub:
+            return
+        if _JOB_EVENT_LISTENER_TASK is not None and not _JOB_EVENT_LISTENER_TASK.done():
+            return
+        _JOB_EVENT_LISTENER_TASK = asyncio.create_task(JOB_STORAGE.listen(_handle_remote_event))
+
+
+async def _stop_job_event_listener() -> None:
+    global _JOB_EVENT_LISTENER_TASK, _JOB_EVENT_LISTENER_USERS
+    task: asyncio.Task[None] | None = None
+    async with _JOB_EVENT_LISTENER_LOCK:
+        if _JOB_EVENT_LISTENER_USERS > 0:
+            _JOB_EVENT_LISTENER_USERS -= 1
+        if _JOB_EVENT_LISTENER_USERS == 0 and _JOB_EVENT_LISTENER_TASK is not None:
+            task = _JOB_EVENT_LISTENER_TASK
+            _JOB_EVENT_LISTENER_TASK = None
+    if task is not None:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
 def _build_service_context() -> ServiceContext:
     return ServiceContext(
         app=app,
@@ -220,6 +354,7 @@ def _build_service_context() -> ServiceContext:
         temp_dir=TEMP_DIR,
         tools=tools,
         job_state=JOB_STATE,
+        job_meta=JOB_META,
         job_lock=JOB_LOCK,
         upload_limiter=UPLOAD_LIMITER,
         download_limiter=DOWNLOAD_LIMITER,
@@ -227,6 +362,13 @@ def _build_service_context() -> ServiceContext:
         progress_push_interval=PROGRESS_PUSH_INTERVAL,
         new_job_state=_new_job_state,
         job_dir=_job_dir,
+        read_job_state=_read_job_state,
+        save_job_state=_save_job_state,
+        list_job_ids=_list_job_ids,
+        read_meta=_read_meta,
+        write_meta=_write_meta,
+        read_blurhash_cache=_read_blurhash_cache,
+        write_blurhash_cache=_write_blurhash_cache,
         read_meta_sync=_read_meta_sync,
         write_meta_sync=_write_meta_sync,
         build_state_event=_build_state_event,

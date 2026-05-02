@@ -25,6 +25,7 @@ async def lifespan(_app):
         legacy.logger.error("7z dependency missing: %s", exc)
         raise
 
+    await legacy._start_job_event_listener()
     cleanup_task = asyncio.create_task(legacy._cleanup_loop())
     try:
         yield
@@ -32,6 +33,7 @@ async def lifespan(_app):
         cleanup_task.cancel()
         with suppress(asyncio.CancelledError):
             await cleanup_task
+        await legacy._stop_job_event_listener()
 
 
 app = build_service_app(

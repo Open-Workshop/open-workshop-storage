@@ -294,7 +294,7 @@ async def _authorize_manage_request(
 
 async def _read_job_meta(ctx: ServiceContext, job_id: str) -> Optional[dict[str, Any]]:
     try:
-        return await anyio.to_thread.run_sync(ctx.read_meta_sync, job_id)
+        return await ctx.read_meta(job_id)
     except Exception:
         return None
 
@@ -304,18 +304,19 @@ async def _initialize_upload_job(
     spec: UploadSpec,
     total: Optional[int],
 ) -> None:
-    async with ctx.job_lock:
-        state = ctx.job_state.get(spec.job_id)
-        if not state:
-            state = ctx.new_job_state()
+    state = await ctx.read_job_state(spec.job_id)
+    if state is None:
+        state = ctx.new_job_state()
+        async with ctx.job_lock:
             ctx.job_state[spec.job_id] = state
-        reset_job_state(
-            state,
-            started=True,
-            status="uploading",
-            stage="uploading",
-            total=total,
-        )
+    reset_job_state(
+        state,
+        started=True,
+        status="uploading",
+        stage="uploading",
+        total=total,
+    )
+    await ctx.save_job_state(spec.job_id, state)
 
     meta = {
         "job_id": spec.job_id,
@@ -330,7 +331,7 @@ async def _initialize_upload_job(
         "status": "uploading",
         "created_at": int(time.time()),
     }
-    await anyio.to_thread.run_sync(ctx.write_meta_sync, spec.job_id, meta)
+    await ctx.write_meta(spec.job_id, meta)
     await ctx.set_stage(spec.job_id, "uploading")
 
 
@@ -650,14 +651,16 @@ async def transfer_start(request: Request):
         getattr(ctx.config, "TRANSFER_MAX_BYTES", None),
     )
 
+    state = await ctx.read_job_state(job_id)
+    if state and state.get("started"):
+        return {
+            "job_id": job_id,
+            "status": state.get("status"),
+            "ws_url": f"/transfer/ws/{job_id}",
+        }
+
     async with ctx.job_lock:
         state = ctx.job_state.get(job_id)
-        if state and state.get("started"):
-            return {
-                "job_id": job_id,
-                "status": state.get("status"),
-                "ws_url": f"/transfer/ws/{job_id}",
-            }
         if not state:
             state = ctx.new_job_state()
             ctx.job_state[job_id] = state
@@ -667,6 +670,7 @@ async def transfer_start(request: Request):
             status="pending",
             stage="pending",
         )
+    await ctx.save_job_state(job_id, state)
 
     meta = {
         "job_id": job_id,
@@ -679,7 +683,7 @@ async def transfer_start(request: Request):
         "status": "pending",
         "created_at": int(time.time()),
     }
-    await anyio.to_thread.run_sync(ctx.write_meta_sync, job_id, meta)
+    await ctx.write_meta(job_id, meta)
 
     update_only = bool(payload.get("update_only") or payload.get("keep_condition"))
     callback_payload = {
@@ -829,18 +833,29 @@ async def transfer_ws(websocket: WebSocket, job_id: str):
     await websocket.accept()
     ctx.logger.info("transfer ws connect job_id=%s", job_id)
     snapshot = None
-    async with ctx.job_lock:
-        state = ctx.job_state.get(job_id)
-        if not state:
-            state = ctx.new_job_state()
-            ctx.job_state[job_id] = state
-        clients = state.get("clients")
-        if not isinstance(clients, list):
-            clients = list(clients) if clients else []
-            state["clients"] = clients
-        if websocket not in clients:
-            clients.append(websocket)
-        snapshot = state_event_payload("progress", state)
+    state = await ctx.read_job_state(job_id)
+    if state is None:
+        async with ctx.job_lock:
+            state = ctx.job_state.get(job_id)
+            if not state:
+                state = ctx.new_job_state()
+                ctx.job_state[job_id] = state
+            clients = state.get("clients")
+            if not isinstance(clients, list):
+                clients = list(clients) if clients else []
+                state["clients"] = clients
+            if websocket not in clients:
+                clients.append(websocket)
+            snapshot = state_event_payload("progress", state)
+    else:
+        async with ctx.job_lock:
+            clients = state.get("clients")
+            if not isinstance(clients, list):
+                clients = list(clients) if clients else []
+                state["clients"] = clients
+            if websocket not in clients:
+                clients.append(websocket)
+            snapshot = state_event_payload("progress", state)
     try:
         if snapshot is not None:
             await websocket.send_json(snapshot)
@@ -1046,7 +1061,7 @@ async def transfer_move(
             "moved_at": int(time.time()),
         }
     )
-    await anyio.to_thread.run_sync(ctx.write_meta_sync, job_id, meta)
+    await ctx.write_meta(job_id, meta)
     await ctx.delete_job_and_dir(job_id)
 
     ctx.logger.info(

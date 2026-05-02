@@ -19,6 +19,8 @@ cp ow_config_sample.py ow_config.py
 | `ACCESS_SERVICE_URL` | yes | Base access service URL used for protected mod download checks |
 | `MANAGER_TRANSFER_CALLBACK_URL` | no | Explicit callback endpoint; if empty, fallback is `<MANAGER_URL>/internal/storage/transfer-completions` |
 | `TRANSFER_JWT_SECRET` | yes | Shared secret for transfer JWT validation and Manager callback signing |
+| `REDIS_URL` | no | Redis connection URL used for shared job state, metadata, and websocket fan-out; leave empty for local in-memory fallback |
+| `REDIS_PREFIX` | no | Key prefix used for Redis job keys and pub/sub channels; default `open-workshop-storage` |
 | `TRANSFER_CALLBACK_TTL_SECONDS` | no | Lifetime of outgoing callback JWTs; default `600` |
 | `TRANSFER_MAX_BYTES` | no | Global maximum transfer size; `0` disables the limit |
 | `TRANSFER_MAX_UNPACKED_BYTES` | no | Global maximum unpacked archive size; `0` disables the limit |
@@ -32,11 +34,12 @@ cp ow_config_sample.py ow_config.py
 | `SEVEN_ZIP_IDLE_TIMEOUT_SECONDS` | no | Idle timeout while waiting for the next `7z` output chunk; default `60`, `0` disables it |
 | `ACCESS_SERVICE_TIMEOUT_SECONDS` | yes | Timeout for access-service download checks |
 | `BLURHASH_CACHE_SIZE` | no | In-memory LRU cache size for computed BlurHash entries; default `100000` |
+| `BLURHASH_CACHE_TTL_SECONDS` | no | Redis TTL for shared BlurHash cache entries when `REDIS_URL` is configured; default `604800`, `0` disables expiry |
 
 ### Service Ownership
 
-- Distributor service: `MAIN_DIR`, `ACCESS_SERVICE_URL`, `ACCESS_SERVICE_TIMEOUT_SECONDS`, `BLURHASH_CACHE_SIZE`
-- Loader service: `MAIN_DIR`, `MANAGER_URL`, `TRANSFER_JWT_SECRET`, `TRANSFER_*`, cleanup settings, and internal tokens
+- Distributor service: `MAIN_DIR`, `ACCESS_SERVICE_URL`, `ACCESS_SERVICE_TIMEOUT_SECONDS`, `BLURHASH_CACHE_SIZE`, `BLURHASH_CACHE_TTL_SECONDS`, `REDIS_URL`, `REDIS_PREFIX` when using shared BlurHash cache
+- Loader service: `MAIN_DIR`, `MANAGER_URL`, `TRANSFER_JWT_SECRET`, `REDIS_*`, `TRANSFER_*`, cleanup settings, and internal tokens
 
 ## Cleanup Settings
 
@@ -95,6 +98,9 @@ The service writes under `MAIN_DIR`:
 
 Ensure the process user can create directories, write files, and remove old job directories.
 
+Redis is optional for tests and local development, but it is the recommended backend for production and any
+multi-worker loader deployment.
+
 ## Required External Dependency
 
 `7z` must be available in `PATH`.
@@ -113,6 +119,8 @@ MANAGER_URL = "http://127.0.0.1:7776"
 ACCESS_SERVICE_URL = "http://127.0.0.1:7777"
 MANAGER_TRANSFER_CALLBACK_URL = ""
 TRANSFER_JWT_SECRET = "replace-me"
+REDIS_URL = "redis://127.0.0.1:6379/0"
+REDIS_PREFIX = "open-workshop-storage"
 TRANSFER_CALLBACK_TTL_SECONDS = 600
 TRANSFER_MAX_BYTES = 0
 TRANSFER_MAX_UNPACKED_BYTES = 0
@@ -126,6 +134,7 @@ SEVEN_ZIP_TIMEOUT_SECONDS = 3600
 SEVEN_ZIP_IDLE_TIMEOUT_SECONDS = 60
 ACCESS_SERVICE_TIMEOUT_SECONDS = 30
 BLURHASH_CACHE_SIZE = 100000
+BLURHASH_CACHE_TTL_SECONDS = 604800
 
 CLEANUP_INTERVAL_SECONDS = 60
 JOB_TTL_SECONDS = 10800
