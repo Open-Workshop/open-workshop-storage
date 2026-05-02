@@ -102,6 +102,38 @@ class ZipHeuristicsTests(unittest.TestCase):
             archive_tools.subprocess.run = original_run
             tools.ensure_7z_available = original_ensure
 
+    def test_run_7z_uses_safe_text_decoding(self):
+        original_modules = {name: sys.modules.get(name) for name in ("bcrypt", "jwt", "PIL")}
+        tools = _load_tools_module()
+        import open_workshop_storage.utils.archive as archive_tools
+
+        original_run = archive_tools.subprocess.run
+        original_ensure = tools.ensure_7z_available
+        recorded: dict[str, object] = {}
+
+        def fake_run(cmd, **kwargs):
+            recorded["cmd"] = cmd
+            recorded["kwargs"] = kwargs
+            return archive_tools.subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+        archive_tools.subprocess.run = fake_run
+        tools.ensure_7z_available = lambda: None
+        try:
+            result = archive_tools._run_7z(["l", "unused.zip"])
+        finally:
+            archive_tools.subprocess.run = original_run
+            tools.ensure_7z_available = original_ensure
+            for name, module in original_modules.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
+        self.assertEqual(result.stdout, "ok")
+        self.assertIs(recorded["kwargs"]["text"], True)
+        self.assertEqual(recorded["kwargs"]["errors"], "replace")
+        self.assertIn("encoding", recorded["kwargs"])
+
 
 if __name__ == "__main__":
     unittest.main()

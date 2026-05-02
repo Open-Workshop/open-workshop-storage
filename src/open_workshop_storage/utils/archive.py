@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import locale
 import os
 import pty
 import re
@@ -125,12 +126,15 @@ def _run_7z(
 ) -> subprocess.CompletedProcess:
     _resolve_tools_export("ensure_7z_available", ensure_7z_available)()
     timeout = _read_7z_timeout(timeout_seconds)
+    encoding = locale.getpreferredencoding(False) or "utf-8"
     try:
         return subprocess.run(
             [SEVEN_ZIP_BIN, *args],
             cwd=cwd,
             capture_output=True,
             text=True,
+            encoding=encoding,
+            errors="replace",
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
