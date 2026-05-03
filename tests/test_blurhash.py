@@ -105,7 +105,7 @@ class BlurhashEndpointTests(unittest.TestCase):
                         self.assertEqual(response.status_code, 200)
 
                 self.assertEqual(call_count["value"], 1)
-                self.assertEqual(files._blurhash_for_file.cache_info().maxsize, 100000)
+                self.assertEqual(files._blurhash_for_file.cache_info().maxsize, files.BLURHASH_CACHE_SIZE)
             finally:
                 files.image_file_to_blurhash = original
                 files._blurhash_for_file.cache_clear()

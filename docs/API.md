@@ -147,7 +147,7 @@ Generates BlurHash strings for a batch of stored image URLs or storage-relative 
 - invalid paths and non-image files return `null` fields for that item instead of failing the whole batch
 - response preserves request order
 - repeated identical file targets inside one batch are computed once and reused
-- computed blurhash values are kept in an in-memory LRU cache, default size `100000`
+- computed blurhash values are kept in an in-memory LRU cache, default size `4096`; larger values increase per-worker RSS
 - when `REDIS_URL` is configured, computed blurhash values are also shared through Redis with a TTL-based cache entry, so other workers can reuse them without recomputing
 
 ### Common responses

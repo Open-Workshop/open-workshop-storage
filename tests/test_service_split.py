@@ -38,7 +38,7 @@ def _load_configured_module(module_name: str, temp_dir: str):
     config.TRANSFER_CALLBACK_TIMEOUT_SECONDS = 30
     config.SEVEN_ZIP_TIMEOUT_SECONDS = 3600
     config.SEVEN_ZIP_IDLE_TIMEOUT_SECONDS = 60
-    config.BLURHASH_CACHE_SIZE = 100000
+    config.BLURHASH_CACHE_SIZE = 4096
     config.CLEANUP_INTERVAL_SECONDS = 60
     config.JOB_TTL_SECONDS = 10800
     config.delete_file = "x"

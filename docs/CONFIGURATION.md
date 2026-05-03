@@ -33,12 +33,12 @@ cp ow_config_sample.py ow_config.py
 | `SEVEN_ZIP_TIMEOUT_SECONDS` | no | Total timeout for each `7z` command; default `3600`, `0` disables it |
 | `SEVEN_ZIP_IDLE_TIMEOUT_SECONDS` | no | Idle timeout while waiting for the next `7z` output chunk; default `60`, `0` disables it |
 | `ACCESS_SERVICE_TIMEOUT_SECONDS` | yes | Timeout for access-service download checks |
-| `BLURHASH_CACHE_SIZE` | no | In-memory LRU cache size for computed BlurHash entries; default `100000` |
+| `BLURHASH_CACHE_SIZE` | no | In-memory LRU cache size for computed BlurHash entries; default `4096`. Each worker keeps its own cache, so higher values can materially increase RSS. |
 | `BLURHASH_CACHE_TTL_SECONDS` | no | Redis TTL for shared BlurHash cache entries when `REDIS_URL` is configured; default `604800`, `0` disables expiry |
 
 ### Service Ownership
 
-- Distributor service: `MAIN_DIR`, `ACCESS_SERVICE_URL`, `ACCESS_SERVICE_TIMEOUT_SECONDS`, `BLURHASH_CACHE_SIZE`, `BLURHASH_CACHE_TTL_SECONDS`, `REDIS_URL`, `REDIS_PREFIX` when using shared BlurHash cache
+- Distributor service: `MAIN_DIR`, `ACCESS_SERVICE_URL`, `ACCESS_SERVICE_TIMEOUT_SECONDS`, `BLURHASH_CACHE_SIZE`, `BLURHASH_CACHE_TTL_SECONDS`, `REDIS_URL`, `REDIS_PREFIX` when using shared BlurHash cache. Keep `BLURHASH_CACHE_SIZE` conservative unless you have a small number of hot images or plenty of per-worker memory headroom.
 - Loader service: `MAIN_DIR`, `MANAGER_URL`, `TRANSFER_JWT_SECRET`, `REDIS_*`, `TRANSFER_*`, cleanup settings, and internal tokens
 
 ## Cleanup Settings
@@ -133,7 +133,7 @@ TRANSFER_CALLBACK_TIMEOUT_SECONDS = 30
 SEVEN_ZIP_TIMEOUT_SECONDS = 3600
 SEVEN_ZIP_IDLE_TIMEOUT_SECONDS = 60
 ACCESS_SERVICE_TIMEOUT_SECONDS = 30
-BLURHASH_CACHE_SIZE = 100000
+BLURHASH_CACHE_SIZE = 4096
 BLURHASH_CACHE_TTL_SECONDS = 604800
 
 CLEANUP_INTERVAL_SECONDS = 60

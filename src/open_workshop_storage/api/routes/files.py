@@ -52,7 +52,9 @@ def _read_int_setting(name: str, default: int) -> int:
         return max(0, int(default))
 
 
-BLURHASH_CACHE_SIZE = _read_int_setting("BLURHASH_CACHE_SIZE", 100000)
+# Keep the in-process cache modest: it is replicated in every worker process,
+# so a very large default can inflate RSS quickly on busy distributors.
+BLURHASH_CACHE_SIZE = _read_int_setting("BLURHASH_CACHE_SIZE", 4096)
 
 
 class BlurhashBatchRequest(BaseModel):
