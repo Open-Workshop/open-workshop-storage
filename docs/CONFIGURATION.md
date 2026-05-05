@@ -1,18 +1,11 @@
 # Configuration
 
-## Config File
-
-The application reads Python settings from `ow_config.py`.
-
-Start from:
-
-```bash
-cp ow_config_sample.py ow_config.py
-```
+The application reads configuration directly from environment variables. There is no Python config file
+anymore.
 
 ## Core Settings
 
-| Setting | Required | Description |
+| Env var | Required | Description |
 | --- | --- | --- |
 | `MAIN_DIR` | yes | Root directory for permanent and temporary storage |
 | `MANAGER_URL` | yes | Base Manager API URL used for fallback transfer callback URL, without a path suffix |
@@ -43,20 +36,18 @@ cp ow_config_sample.py ow_config.py
 
 ## Cleanup Settings
 
-| Setting | Default | Description |
+| Env var | Default | Description |
 | --- | --- | --- |
 | `CLEANUP_INTERVAL_SECONDS` | `60` | How often cleanup loop scans inactive jobs |
 | `JOB_TTL_SECONDS` | `10800` | How long an inactive job can remain before cleanup removes it |
 
 ## Token Settings
 
-| Setting | Used by | Description |
+| Env var | Used by | Description |
 | --- | --- | --- |
-| `delete_file` | Manager -> storage | Secret used by `/delete` |
-| `upload_file` | Manager -> storage | Secret used by `/upload` |
-| `storage_manage_token` | Manager -> storage | Secret used by `/transfer/repack` and `/transfer/move` |
-
-### Important note
+| `DELETE_FILE` | Manager -> storage | Secret used by `/delete` |
+| `UPLOAD_FILE` | Manager -> storage | Secret used by `/upload` |
+| `STORAGE_MANAGE_TOKEN` | Manager -> storage | Secret used by `/transfer/repack` and `/transfer/move` |
 
 Incoming form tokens are validated with bcrypt in the storage service.
 
@@ -65,17 +56,17 @@ Incoming form tokens are validated with bcrypt in the storage service.
 Use:
 
 ```bash
-python token_gen.py
+cargo run --bin token_gen
 ```
 
-This helper prints generated token pairs. Review the output carefully and place values into `ow_config.py`
-according to your integration contract.
+This helper prints generated token pairs. Review the output carefully and place the hashes into the
+corresponding environment variables.
 
 ## Telemetry Settings
 
-Telemetry is optional and can be set through environment variables or `ow_config.py`.
+Telemetry is optional and can be set through environment variables.
 
-| Setting | Description |
+| Env var | Description |
 | --- | --- |
 | `UPTRACE_DSN` | Enables Uptrace / OpenTelemetry export |
 | `OTEL_SERVICE_NAME` | Service name in traces |
@@ -113,33 +104,31 @@ sudo apt install -y p7zip-full
 
 ## Minimal Example
 
-```python
-MAIN_DIR = "storage"
-MANAGER_URL = "http://127.0.0.1:7776"
-ACCESS_SERVICE_URL = "http://127.0.0.1:7777"
-MANAGER_TRANSFER_CALLBACK_URL = ""
-TRANSFER_JWT_SECRET = "replace-me"
-REDIS_URL = "redis://127.0.0.1:6379/0"
-REDIS_PREFIX = "open-workshop-storage"
-TRANSFER_CALLBACK_TTL_SECONDS = 600
-TRANSFER_MAX_BYTES = 0
-TRANSFER_MAX_UNPACKED_BYTES = 0
-TRANSFER_UPLOAD_CONCURRENCY = 8
-TRANSFER_DOWNLOAD_CONCURRENCY = 16
-TRANSFER_REPACK_CONCURRENCY = 8
-TRANSFER_UPLOAD_TIMEOUT_SECONDS = 3600
-TRANSFER_DOWNLOAD_TIMEOUT_SECONDS = 3600
-TRANSFER_CALLBACK_TIMEOUT_SECONDS = 30
-SEVEN_ZIP_TIMEOUT_SECONDS = 3600
-SEVEN_ZIP_IDLE_TIMEOUT_SECONDS = 60
-ACCESS_SERVICE_TIMEOUT_SECONDS = 30
-BLURHASH_CACHE_SIZE = 4096
-BLURHASH_CACHE_TTL_SECONDS = 604800
-
-CLEANUP_INTERVAL_SECONDS = 60
-JOB_TTL_SECONDS = 10800
-
-delete_file = "replace-with-bcrypt-hash"
-upload_file = "replace-with-bcrypt-hash"
-storage_manage_token = "replace-with-bcrypt-hash"
+```bash
+export MAIN_DIR=storage
+export MANAGER_URL=http://127.0.0.1:7776
+export ACCESS_SERVICE_URL=http://127.0.0.1:7777
+export MANAGER_TRANSFER_CALLBACK_URL=
+export TRANSFER_JWT_SECRET=replace-me
+export REDIS_URL=redis://127.0.0.1:6379/0
+export REDIS_PREFIX=open-workshop-storage
+export TRANSFER_CALLBACK_TTL_SECONDS=600
+export TRANSFER_MAX_BYTES=0
+export TRANSFER_MAX_UNPACKED_BYTES=0
+export TRANSFER_UPLOAD_CONCURRENCY=8
+export TRANSFER_DOWNLOAD_CONCURRENCY=16
+export TRANSFER_REPACK_CONCURRENCY=8
+export TRANSFER_UPLOAD_TIMEOUT_SECONDS=3600
+export TRANSFER_DOWNLOAD_TIMEOUT_SECONDS=3600
+export TRANSFER_CALLBACK_TIMEOUT_SECONDS=30
+export SEVEN_ZIP_TIMEOUT_SECONDS=3600
+export SEVEN_ZIP_IDLE_TIMEOUT_SECONDS=60
+export ACCESS_SERVICE_TIMEOUT_SECONDS=30
+export BLURHASH_CACHE_SIZE=4096
+export BLURHASH_CACHE_TTL_SECONDS=604800
+export CLEANUP_INTERVAL_SECONDS=60
+export JOB_TTL_SECONDS=10800
+export DELETE_FILE=replace-with-bcrypt-hash
+export UPLOAD_FILE=replace-with-bcrypt-hash
+export STORAGE_MANAGE_TOKEN=replace-with-bcrypt-hash
 ```
