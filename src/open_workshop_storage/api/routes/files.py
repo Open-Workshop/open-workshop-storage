@@ -201,7 +201,9 @@ async def blurhashes(request: Request, payload: BlurhashBatchRequest) -> Blurhas
     summary="Download stored file",
     description=(
         "Downloads a stored file. For archive/mod downloads access is validated via the access service. "
-        "Optional query param `filename` can be used to override download name (safe chars only)."
+        "Resource files are served under the same endpoint, including paths like `resource/mods/...` "
+        "and `resource/modpacks/...`. Optional query param `filename` can be used to override download "
+        "name (safe chars only)."
     ),
     status_code=200,
     response_class=FileResponse,

@@ -73,6 +73,27 @@ class BlurhashEndpointTests(unittest.TestCase):
             self.assertEqual(item["width"], 6)
             self.assertEqual(item["height"], 4)
 
+    def test_blurhash_batch_generates_hashes_for_modpack_download_urls(self):
+        with TemporaryDirectory() as temp_dir:
+            main = _load_main_module(temp_dir)
+            image_path = Path(main.MAIN_DIR) / "resource" / "modpacks" / "123" / "logo.png"
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (8, 5), (32, 160, 255)).save(image_path, format="PNG")
+
+            source_url = "https://storage.openworkshop.miskler.ru/download/resource/modpacks/123/logo.png"
+            with TestClient(main.app) as client:
+                response = client.post("/blurhashes", json={"paths": [source_url]})
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(len(payload["items"]), 1)
+            item = payload["items"][0]
+            self.assertEqual(item["path"], source_url)
+            self.assertIsInstance(item["blurhash"], str)
+            self.assertEqual(len(item["blurhash"]), 28)
+            self.assertEqual(item["width"], 8)
+            self.assertEqual(item["height"], 5)
+
     def test_blurhash_batch_uses_cache_for_repeated_files(self):
         with TemporaryDirectory() as temp_dir:
             main = _load_main_module(temp_dir)

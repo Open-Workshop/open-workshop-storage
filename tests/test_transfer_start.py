@@ -328,6 +328,19 @@ class TransferStartTests(unittest.TestCase):
             self.assertEqual(response.status_code, 403)
             self.assertEqual(response.text, "У вас нет доступа к этому моду.")
 
+    def test_download_resource_modpack_file(self):
+        with TemporaryDirectory() as temp_dir:
+            main = _load_main_module(temp_dir)
+            resource_path = Path(main.MAIN_DIR) / "resource" / "modpacks" / "123" / "logo.png"
+            resource_path.parent.mkdir(parents=True, exist_ok=True)
+            resource_path.write_bytes(b"modpack-resource")
+
+            with TestClient(main.app) as client:
+                response = client.get("/download/resource/modpacks/123/logo.png")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.content, b"modpack-resource")
+
 
 if __name__ == "__main__":
     unittest.main()

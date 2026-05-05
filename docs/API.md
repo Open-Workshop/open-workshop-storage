@@ -37,6 +37,7 @@ These endpoints expect a plain token from the caller and validate it against con
 Protected archive downloads call the access service, which reads the request cookies and resolves mod rights:
 
 - `/download/{type}/{path:path}` for `archive/mods/...`
+- `/download/{type}/{path:path}` for `resource/mods/...` and `resource/modpacks/...`
 
 ### Transfer JWT endpoints
 
@@ -134,7 +135,7 @@ Generates BlurHash strings for a batch of stored image URLs or storage-relative 
 
 ### Request body
 
-- `paths`: list of storage download URLs or relative paths like `download/resource/...`
+- `paths`: list of storage download URLs or relative paths like `download/resource/mods/...` or `download/resource/modpacks/...`
 
 ### Response body
 
