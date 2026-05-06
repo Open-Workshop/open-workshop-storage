@@ -1,14 +1,14 @@
 # API Reference
 
 This document is a route-level reference for the Rust `distributor` and `loader` binaries.
-The current implementation serves plain HTTP endpoints and does not expose Swagger UI or OpenAPI JSON.
-When both services share one domain, only the health endpoints are typically namespaced; the functional
-routes below stay at their natural root paths.
+The implementation also exposes Swagger UI in the root of each service and OpenAPI JSON alongside it.
+When both services share one domain, only the health and docs routes are typically namespaced; the
+functional routes below stay at their natural root paths.
 
 ## Service Split
 
-- Distributor service: `/healthz`, `/download/{type}/{path:path}`, `/blurhashes`
-- Loader service: `/healthz`, `/upload`, `/delete`, and all `/transfer/*` endpoints
+- Distributor service: `/`, `/healthz`, `/openapi.json`, `/download/{type}/{path:path}`, `/blurhashes`
+- Loader service: `/`, `/healthz`, `/openapi.json`, `/upload`, `/delete`, and all `/transfer/*` endpoints
 
 ## Authentication Summary
 

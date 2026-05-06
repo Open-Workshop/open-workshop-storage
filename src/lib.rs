@@ -9,6 +9,7 @@ pub mod handlers;
 pub mod images;
 pub mod job_meta;
 pub mod limits;
+pub mod openapi_docs;
 pub mod redis_store;
 pub mod runtime;
 pub mod state;

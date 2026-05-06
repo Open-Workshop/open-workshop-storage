@@ -77,8 +77,8 @@ make run-loader
 
 Main routes:
 
-- Distributor: `GET /healthz`, `POST /blurhashes`, `GET|HEAD /download/:storage_type/*path`
-- Loader: `GET /healthz`, `POST /upload`, `DELETE /delete`, `GET|POST /transfer/start`, `POST /transfer/upload`, `WS /transfer/ws/:job_id`, `POST /transfer/repack`, `POST /transfer/move`
+- Distributor: `GET /`, `GET /healthz`, `GET /openapi.json`, `POST /blurhashes`, `GET|HEAD /download/:storage_type/*path`
+- Loader: `GET /`, `GET /healthz`, `GET /openapi.json`, `POST /upload`, `DELETE /delete`, `GET|POST /transfer/start`, `POST /transfer/upload`, `WS /transfer/ws/:job_id`, `POST /transfer/repack`, `POST /transfer/move`
 
 ## Notes
 

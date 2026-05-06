@@ -9,6 +9,7 @@ use axum::routing::{delete, get, post};
 use axum::Router;
 
 use crate::handlers::{files, transfers};
+use crate::openapi_docs;
 use crate::runtime::AppState;
 
 async fn cors_middleware(req: axum::http::Request<Body>, next: Next) -> Response {
@@ -60,27 +61,13 @@ async fn healthz(Extension(_state): Extension<Arc<AppState>>) -> impl IntoRespon
     )
 }
 
-async fn distributor_docs(Extension(_state): Extension<Arc<AppState>>) -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        "Open Workshop Distributor\n\nHealth: /healthz\nEndpoints: /blurhashes, /download/:storage_type/*path",
-    )
-}
-
-async fn loader_docs(Extension(_state): Extension<Arc<AppState>>) -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        "Open Workshop Loader\n\nHealth: /healthz\nEndpoints: /upload, /delete, /transfer/*",
-    )
-}
-
 fn base_router() -> Router {
     Router::new().route("/healthz", get(healthz))
 }
 
 pub fn build_distributor_router(state: Arc<AppState>) -> Router {
     base_router()
-        .route("/", get(distributor_docs))
+        .merge(openapi_docs::distributor_docs_router())
         .route("/blurhashes", post(files::blurhashes))
         .route(
             "/download/:storage_type/*path",
@@ -92,7 +79,7 @@ pub fn build_distributor_router(state: Arc<AppState>) -> Router {
 
 pub fn build_loader_router(state: Arc<AppState>) -> Router {
     base_router()
-        .route("/", get(loader_docs))
+        .merge(openapi_docs::loader_docs_router())
         .route("/upload", post(files::upload))
         .route("/delete", delete(files::delete))
         .route(

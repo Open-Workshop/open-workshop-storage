@@ -19,9 +19,7 @@ async fn distributor_router_exposes_public_routes_only() {
     let docs = call(&app, Method::GET, "/", Body::empty()).await;
     assert_eq!(docs.status(), StatusCode::OK);
     let docs_text = response_text(docs).await;
-    assert!(docs_text.contains("Open Workshop Distributor"));
-    assert!(docs_text.contains("/blurhashes"));
-    assert!(docs_text.contains("/download/:storage_type/*path"));
+    assert!(docs_text.contains("swagger-ui"));
 
     assert_eq!(
         call(&app, Method::GET, "/transfer/start", Body::empty())
@@ -56,9 +54,7 @@ async fn loader_router_exposes_ingest_routes_only() {
     let docs = call(&app, Method::GET, "/", Body::empty()).await;
     assert_eq!(docs.status(), StatusCode::OK);
     let docs_text = response_text(docs).await;
-    assert!(docs_text.contains("Open Workshop Loader"));
-    assert!(docs_text.contains("/upload"));
-    assert!(docs_text.contains("/transfer/*"));
+    assert!(docs_text.contains("swagger-ui"));
 
     assert_eq!(
         call(
