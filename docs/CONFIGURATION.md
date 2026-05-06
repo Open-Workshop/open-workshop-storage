@@ -62,21 +62,14 @@ cargo run --bin token_gen
 This helper prints generated token pairs. Review the output carefully and place the hashes into the
 corresponding environment variables.
 
-## Telemetry Settings
+## Logging
 
-Telemetry is optional and can be set through environment variables.
+The Rust binaries use `tracing_subscriber` with the default environment filter.
 
 | Env var | Description |
 | --- | --- |
-| `UPTRACE_DSN` | Enables Uptrace / OpenTelemetry export |
-| `OTEL_SERVICE_NAME` | Service name in traces |
-| `OTEL_SERVICE_VERSION` | Service version in traces |
-| `OTEL_DEPLOYMENT_ENVIRONMENT` | Environment name |
-| `UPTRACE_OTLP_PROTOCOL` | `grpc` or `http` |
-| `UPTRACE_FASTAPI_EXCLUDED_URLS` | Regex list of paths excluded from tracing |
-| `UPTRACE_FASTAPI_EXCLUDE_SPANS` | Usually `receive,send` to hide noisy ASGI spans |
-| `UPTRACE_OTLP_TRACES_URL` | Custom OTLP HTTP traces endpoint |
-| `UPTRACE_OTLP_GRPC_URL` | Custom OTLP gRPC endpoint |
+| `RUST_LOG` | Controls log verbosity, for example `info`, `debug`, or `open_workshop_storage=debug,hyper=warn` |
+| `RUST_BACKTRACE` | Enables backtraces on panics when set to `1` |
 
 ## Filesystem Expectations
 

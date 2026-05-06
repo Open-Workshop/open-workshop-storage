@@ -60,6 +60,8 @@ OPEN_WORKSHOP_PORT=8001 cargo run --bin loader
 
 The services also respect `OPEN_WORKSHOP_HOST`, which defaults to `0.0.0.0`.
 
+For systemd deployment, see [docs/DEPLOYMENT.md](/home/admin1/Documents/GitHub/open-workshop-storage/docs/DEPLOYMENT.md).
+
 ## Convenience Commands
 
 ```bash
