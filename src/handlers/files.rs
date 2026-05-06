@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::{Extension, Multipart, Path as AxumPath, Query};
-use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
+use axum::http::header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -184,16 +184,21 @@ async fn open_file_response(
     head_only: bool,
     unpacked_bytes: Option<u64>,
 ) -> Result<Response, Response> {
+    let file_size = fs::metadata(&real_path)
+        .await
+        .map_err(|_| error_response(StatusCode::NOT_FOUND, "File not found"))?
+        .len();
     let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "application/octet-stream")
         .header(
             CONTENT_DISPOSITION,
             format!(
-                r#"attachment; filename=\"{}\""#,
+                "attachment; filename=\"{}\"",
                 download_name.replace('"', "")
             ),
         );
+    builder = builder.header(CONTENT_LENGTH, file_size.to_string());
     if let Some(unpacked_bytes) = unpacked_bytes {
         builder = builder.header("X-Unpacked-Bytes", unpacked_bytes.to_string());
     }
