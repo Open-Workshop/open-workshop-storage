@@ -1,7 +1,7 @@
 mod common;
 
 use axum::body::Body;
-use axum::http::{Method, StatusCode};
+use axum::http::{header::LOCATION, Method, StatusCode};
 use common::{call, response_bytes, response_text, temp_dir, test_state};
 use open_workshop_storage::web::{build_distributor_router, build_loader_router};
 use serde_json::Value;
@@ -20,6 +20,22 @@ async fn distributor_swagger_ui_and_openapi_are_exposed() {
     assert_eq!(docs.status(), StatusCode::OK);
     let docs_text = response_text(docs).await;
     assert!(docs_text.contains("swagger-ui"));
+
+    let redoc_redirect = call(&app, Method::GET, "/redoc", Body::empty()).await;
+    assert_eq!(redoc_redirect.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        redoc_redirect
+            .headers()
+            .get(LOCATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("redoc/")
+    );
+
+    let redoc = call(&app, Method::GET, "/redoc/", Body::empty()).await;
+    assert_eq!(redoc.status(), StatusCode::OK);
+    let redoc_text = response_text(redoc).await;
+    assert!(redoc_text.contains("redoc"));
+    assert!(redoc_text.contains("../openapi.json"));
 
     let openapi =
         json_from_response(call(&app, Method::GET, "/openapi.json", Body::empty()).await).await;
@@ -40,6 +56,22 @@ async fn loader_swagger_ui_and_openapi_are_exposed() {
     assert_eq!(docs.status(), StatusCode::OK);
     let docs_text = response_text(docs).await;
     assert!(docs_text.contains("swagger-ui"));
+
+    let redoc_redirect = call(&app, Method::GET, "/redoc", Body::empty()).await;
+    assert_eq!(redoc_redirect.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        redoc_redirect
+            .headers()
+            .get(LOCATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("redoc/")
+    );
+
+    let redoc = call(&app, Method::GET, "/redoc/", Body::empty()).await;
+    assert_eq!(redoc.status(), StatusCode::OK);
+    let redoc_text = response_text(redoc).await;
+    assert!(redoc_text.contains("redoc"));
+    assert!(redoc_text.contains("../openapi.json"));
 
     let openapi =
         json_from_response(call(&app, Method::GET, "/openapi.json", Body::empty()).await).await;

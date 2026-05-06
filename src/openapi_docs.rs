@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::extract::{Extension, OriginalUri};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderValue, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::Json;
 use axum::Router;
@@ -16,6 +16,23 @@ use utoipa::{Modify, OpenApi, ToSchema};
 use utoipa_swagger_ui::{serve, Config as SwaggerConfig};
 
 type OpenApiSpec = utoipa::openapi::OpenApi;
+
+const REDOC_HTML: &str = r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Open Workshop Storage ReDoc</title>
+    <style>
+      body { margin: 0; background: #f6f7fb; }
+      redoc { display: block; }
+    </style>
+  </head>
+  <body>
+    <redoc spec-url="../openapi.json"></redoc>
+    <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+  </body>
+</html>"#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct HealthResponseDoc {
@@ -383,6 +400,14 @@ async fn swagger_ui_root(Extension(config): Extension<Arc<SwaggerConfig<'static>
     swagger_file_response("", config)
 }
 
+async fn redoc_redirect() -> impl IntoResponse {
+    axum::response::Redirect::to("redoc/")
+}
+
+async fn redoc_root() -> Html<&'static str> {
+    Html(REDOC_HTML)
+}
+
 async fn swagger_ui_asset(
     OriginalUri(original_uri): OriginalUri,
     Extension(config): Extension<Arc<SwaggerConfig<'static>>>,
@@ -399,6 +424,8 @@ fn docs_router(openapi: Arc<OpenApiSpec>) -> Router {
     let config = swagger_config();
     Router::new()
         .route("/", get(swagger_ui_root))
+        .route("/redoc", get(redoc_redirect))
+        .route("/redoc/", get(redoc_root))
         .route("/openapi.json", get(openapi_json))
         .route("/swagger-ui/openapi.json", get(openapi_json))
         .fallback(any(swagger_ui_asset))
