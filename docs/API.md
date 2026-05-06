@@ -167,6 +167,7 @@ Start a background transfer from a download URL embedded in a transfer JWT.
 - `pack_format`: optional, currently only `zip`
 - `pack_level`: optional, defaults to `3`
 - `max_bytes`: optional
+- `mode`: optional archive mode from Manager, typically `create` or `replace`
 - `update_only` or `keep_condition`: optional manager callback hint
 
 ### Response
@@ -209,6 +210,10 @@ Archive-specific fields:
 - `mod_id`
 - `pack_format`
 - `pack_level`
+- `mode`
+- `condition` is derived for archive jobs:
+  - `create` -> `draft`
+  - `replace` -> `published`
 - `update_only` or `keep_condition`
 
 Image-specific fields:
@@ -341,5 +346,7 @@ Possible payload fields include:
 - `callback_action`
 - `callback_context`
 - `target_path`
+- `mode` for archive jobs
+- `condition` for archive jobs, derived from the archive mode
 
 The exact fields depend on the transfer flow and whether the job succeeded or failed.

@@ -108,6 +108,7 @@ fn transfer_upload_payload(job_id: &str) -> Map<String, Value> {
         "transfer_kind".to_string(),
         Value::String("archive".to_string()),
     );
+    payload.insert("mode".to_string(), Value::String("create".to_string()));
     payload.insert("mod_id".to_string(), Value::from(123));
     payload.insert("pack_format".to_string(), Value::String("zip".to_string()));
     payload.insert("pack_level".to_string(), Value::from(3));
@@ -344,6 +345,11 @@ async fn transfer_upload_returns_busy_when_limiter_is_full() {
         Some("error")
     );
     assert_eq!(callback.get("reason").and_then(Value::as_str), Some("busy"));
+    assert_eq!(callback.get("mode").and_then(Value::as_str), Some("create"));
+    assert_eq!(
+        callback.get("condition").and_then(Value::as_str),
+        Some("draft")
+    );
 }
 
 #[tokio::test]
@@ -397,6 +403,11 @@ async fn transfer_upload_times_out_and_cleans_up() {
     assert_eq!(
         callback.get("reason").and_then(Value::as_str),
         Some("timeout")
+    );
+    assert_eq!(callback.get("mode").and_then(Value::as_str), Some("create"));
+    assert_eq!(
+        callback.get("condition").and_then(Value::as_str),
+        Some("draft")
     );
 }
 

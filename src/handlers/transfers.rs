@@ -166,6 +166,39 @@ fn parse_pack_level(raw_value: Option<i64>, default: i64) -> u32 {
     level as u32
 }
 
+fn normalize_archive_mode(raw_value: Option<&Value>) -> Option<String> {
+    let mode = raw_value?.as_str()?.trim().to_lowercase();
+    if matches!(mode.as_str(), "create" | "replace") {
+        Some(mode)
+    } else {
+        None
+    }
+}
+
+fn archive_condition_from_payload(payload: &Map<String, Value>) -> String {
+    if let Some(mode) = normalize_archive_mode(payload.get("mode")) {
+        return if mode == "replace" {
+            "published".to_string()
+        } else {
+            "draft".to_string()
+        };
+    }
+
+    if payload
+        .get("update_only")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+        || payload
+            .get("keep_condition")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    {
+        "published".to_string()
+    } else {
+        "draft".to_string()
+    }
+}
+
 fn read_timeout_seconds(raw_value: Option<f64>, default: f64) -> Option<Duration> {
     let value = raw_value.unwrap_or(default);
     if value <= 0.0 {
@@ -249,6 +282,13 @@ async fn build_upload_spec(
     let mut file_kind = String::new();
 
     if transfer_kind == "archive" {
+        if let Some(mode) = normalize_archive_mode(payload.get("mode")) {
+            callback_payload.insert("mode".to_string(), Value::String(mode));
+        }
+        callback_payload.insert(
+            "condition".to_string(),
+            Value::String(archive_condition_from_payload(payload)),
+        );
         pack_format = payload
             .get("pack_format")
             .and_then(|value| value.as_str())
@@ -889,6 +929,13 @@ async fn start_transfer(state: Arc<AppState>, token: Option<String>) -> Response
         Value::String(pack_format.clone()),
     );
     callback_payload.insert("pack_level".to_string(), Value::from(pack_level));
+    if let Some(mode) = normalize_archive_mode(payload.get("mode")) {
+        callback_payload.insert("mode".to_string(), Value::String(mode));
+    }
+    callback_payload.insert(
+        "condition".to_string(),
+        Value::String(archive_condition_from_payload(&payload)),
+    );
     callback_payload.insert(
         "update_only".to_string(),
         Value::Bool(
