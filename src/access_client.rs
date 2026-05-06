@@ -6,10 +6,9 @@ use bytes::Bytes;
 use http_body_util::{BodyExt as _, Full};
 use hyper::body::Incoming;
 use hyper::StatusCode;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
 use serde::Deserialize;
+
+use crate::http_client::build_hyper_client;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModDownloadAccessResult {
@@ -105,9 +104,7 @@ pub async fn resolve_mod_download_access(
     })?;
     let timeout = Duration::from_secs(timeout_seconds.max(1));
 
-    let mut connector = HttpConnector::new();
-    connector.enforce_http(false);
-    let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build(connector);
+    let client = build_hyper_client();
 
     let mut request_builder = Request::post(uri)
         .header(CONTENT_TYPE, "application/json")

@@ -6,6 +6,7 @@ pub mod blurhash_service;
 pub mod config;
 pub mod fs_utils;
 pub mod handlers;
+pub mod http_client;
 pub mod images;
 pub mod job_meta;
 pub mod limits;

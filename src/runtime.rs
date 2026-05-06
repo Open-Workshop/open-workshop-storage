@@ -10,9 +10,6 @@ use axum::http::{Request, Uri};
 use bytes::Bytes;
 use futures_util::FutureExt;
 use http_body_util::Full;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
 use lru::LruCache;
 use serde_json::{Map, Value};
 use tokio::sync::Mutex;
@@ -21,6 +18,7 @@ use tokio::task::JoinHandle;
 use crate::auth;
 use crate::config::AppConfig;
 use crate::fs_utils::safe_path;
+use crate::http_client::build_hyper_client;
 use crate::limits::ConcurrencyLimiter;
 use crate::redis_store::{RedisBackend, RedisEventCallback};
 use crate::state::{
@@ -545,9 +543,7 @@ impl AppState {
             Ok(uri) => uri,
             Err(_) => return,
         };
-        let mut connector = HttpConnector::new();
-        connector.enforce_http(false);
-        let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build(connector);
+        let client = build_hyper_client();
         let request = match Request::post(uri)
             .header(AUTHORIZATION, format!("Bearer {token}"))
             .header(CONTENT_TYPE, "application/json")

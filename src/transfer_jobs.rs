@@ -8,9 +8,6 @@ use bytes::Bytes;
 use http_body_util::{BodyExt as _, Full};
 use hyper::body::Incoming;
 use hyper::StatusCode;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
 use serde_json::{Map, Value};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -20,6 +17,7 @@ use crate::archive::{
     archive_entries_unpacked_bytes, probe_archive, safe_extract_archive, zip_dir_with_level,
     zip_uses_deflated_or_better,
 };
+use crate::http_client::build_hyper_client;
 use crate::job_meta::update_job_meta;
 use crate::runtime::AppState;
 use crate::state::state_event_payload;
@@ -97,12 +95,6 @@ async fn update_state_error_and_broadcast(
     state.set_state(job_id, updates).await;
     let event = state_event_with_message(state, job_id, "error", Some(message)).await;
     state.broadcast(job_id, event).await;
-}
-
-fn build_hyper_client() -> Client<HttpConnector, Full<Bytes>> {
-    let mut connector = HttpConnector::new();
-    connector.enforce_http(false);
-    Client::builder(TokioExecutor::new()).build(connector)
 }
 
 async fn http_get_bytes(
