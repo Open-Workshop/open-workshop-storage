@@ -1,16 +1,30 @@
-.PHONY: type-check format lint
+.PHONY: build check test fmt fmt-check lint run-distributor run-loader release
 
-PYTHON ?= $(if $(wildcard .venv/bin/python),./.venv/bin/python,python3)
-SRC_DIRS := src tests
+CARGO ?= cargo
 
-type-check:
-	$(PYTHON) -m mypy $(SRC_DIRS)
+build:
+	$(CARGO) build
 
-format:
-	$(PYTHON) -m isort $(SRC_DIRS)
-	$(PYTHON) -m black $(SRC_DIRS)
+check:
+	$(CARGO) check
+
+test:
+	$(CARGO) test
+
+fmt:
+	$(CARGO) fmt
+
+fmt-check:
+	$(CARGO) fmt --check
 
 lint:
-	$(PYTHON) -m isort --check-only $(SRC_DIRS)
-	$(PYTHON) -m black --check $(SRC_DIRS)
-	$(PYTHON) -m flake8 $(SRC_DIRS)
+	$(CARGO) clippy --all-targets --all-features -- -D warnings
+
+run-distributor:
+	$(CARGO) run --bin distributor
+
+run-loader:
+	$(CARGO) run --bin loader
+
+release:
+	$(CARGO) build --release
