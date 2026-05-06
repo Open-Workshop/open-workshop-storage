@@ -213,7 +213,14 @@ pub async fn run_repack_job(
     Option<u64>,
     Option<String>,
 ) {
+    tracing::info!(job_id, pack_format, pack_level, "transfer repack requested");
     let Some(_permit) = state.repack_limiter.try_acquire() else {
+        tracing::warn!(
+            job_id,
+            pack_format,
+            pack_level,
+            "transfer repack rejected: busy"
+        );
         update_state_error_and_broadcast(&state, job_id, "busy", "storage busy").await;
         let mut updates = Map::new();
         updates.insert("status".to_string(), Value::String("error".to_string()));
@@ -254,7 +261,13 @@ async fn _run_repack_job_limited(
     Option<u64>,
     Option<String>,
 ) {
+    tracing::info!(job_id, pack_format, pack_level, "transfer repack started");
     if pack_format != "zip" {
+        tracing::warn!(
+            job_id,
+            pack_format,
+            "transfer repack rejected: unsupported format"
+        );
         update_state_error_and_broadcast(
             &state,
             job_id,
@@ -282,7 +295,7 @@ async fn _run_repack_job_limited(
     let (archive_type, is_encrypted, archive_entries) = match probe {
         Ok(value) => value,
         Err(err) => {
-            eprintln!("transfer archive probe failed job_id={job_id} error={err}");
+            tracing::warn!(job_id, error = %err, "transfer archive probe failed");
             let mut updates = Map::new();
             updates.insert("status".to_string(), Value::String("error".to_string()));
             updates.insert("error".to_string(), Value::String(err.to_string()));
@@ -304,6 +317,7 @@ async fn _run_repack_job_limited(
         0,
     );
     if is_encrypted {
+        tracing::warn!(job_id, "transfer repack denied: encrypted zip");
         update_state_error_and_broadcast(&state, job_id, "encrypted_zip", "zip encrypted").await;
         let mut updates = Map::new();
         updates.insert("status".to_string(), Value::String("error".to_string()));
@@ -330,6 +344,12 @@ async fn _run_repack_job_limited(
 
     if let (Some(limit), Some(unpacked_bytes)) = (max_unpacked_bytes, unpacked_bytes) {
         if unpacked_bytes > limit {
+            tracing::warn!(
+                job_id,
+                unpacked_bytes,
+                limit,
+                "transfer repack denied: unpacked size limit"
+            );
             update_state_error_and_broadcast(
                 &state,
                 job_id,
@@ -393,7 +413,12 @@ async fn _run_repack_job_limited(
                     )
                     .await;
                     let _ = state.set_stage(job_id, "packed").await;
-                    eprintln!("transfer repack skipped (zip ok) job_id={job_id} packed_bytes={packed_bytes}");
+                    tracing::info!(
+                        job_id,
+                        packed_bytes,
+                        unpacked_bytes = ?unpacked_bytes,
+                        "transfer repack skipped: zip already acceptable"
+                    );
                     return (
                         true,
                         Some(packed_rel.to_string_lossy().to_string()),
@@ -403,7 +428,7 @@ async fn _run_repack_job_limited(
                     );
                 }
                 Err(err) => {
-                    eprintln!("failed to stat packed file job_id={job_id} error={err}");
+                    tracing::warn!(job_id, error = %err, "failed to stat packed file");
                 }
             }
         }
@@ -448,7 +473,7 @@ async fn _run_repack_job_limited(
         let _ = tokio::fs::remove_dir_all(&repack_abs).await;
     }
     if let Err(err) = fs::create_dir_all(&repack_abs).await {
-        eprintln!("failed to create repack dir job_id={job_id} error={err}");
+        tracing::warn!(job_id, error = %err, "failed to create repack dir");
         return (
             false,
             None,
@@ -485,7 +510,7 @@ async fn _run_repack_job_limited(
         )
         .await;
         if let Err(err) = result {
-            eprintln!("transfer repack failed job_id={job_id} error={err}");
+            tracing::warn!(job_id, error = %err, "transfer repack failed");
             update_state_error_and_broadcast(&state, job_id, "repack_failed", "repack failed")
                 .await;
             return (
@@ -601,9 +626,12 @@ async fn _run_repack_job_limited(
     )
     .await;
     let _ = state.set_stage(job_id, "packed").await;
-    eprintln!(
-        "transfer repack done job_id={job_id} packed_bytes={packed_bytes} duration={:.2}s",
-        start_ts.elapsed().as_secs_f64()
+    tracing::info!(
+        job_id,
+        packed_bytes,
+        unpacked_bytes = ?unpacked_bytes,
+        duration = start_ts.elapsed().as_secs_f64(),
+        "transfer repack completed"
     );
 
     (
@@ -624,7 +652,7 @@ pub async fn run_download_job(
     callback_payload: Map<String, Value>,
 ) {
     let Some(_permit) = state.download_limiter.try_acquire() else {
-        eprintln!("transfer download rejected (busy) job_id={job_id}");
+        tracing::warn!(job_id, "transfer download rejected: busy");
         update_state_error_and_broadcast(&state, job_id, "busy", "storage busy").await;
         let mut updates = Map::new();
         updates.insert("status".to_string(), Value::String("error".to_string()));
@@ -667,6 +695,12 @@ async fn _run_download_job_limited(
     max_bytes: Option<u64>,
     callback_payload: Map<String, Value>,
 ) {
+    tracing::info!(
+        job_id,
+        download_url = %download_url.split('?').next().unwrap_or(download_url),
+        max_bytes = ?max_bytes,
+        "transfer download started"
+    );
     let mut updates = Map::new();
     updates.insert(
         "status".to_string(),
@@ -701,6 +735,7 @@ async fn _run_download_job_limited(
     let (status, content_length, mut body) = match result {
         Ok(value) => value,
         Err(err) if err == "timeout" => {
+            tracing::warn!(job_id, "transfer download timed out");
             update_state_error_and_broadcast(&state, job_id, "timeout", "download timed out").await;
             let mut callback = callback_payload.clone();
             callback.insert("job_id".to_string(), Value::String(job_id.to_string()));
@@ -711,7 +746,7 @@ async fn _run_download_job_limited(
             return;
         }
         Err(err) => {
-            eprintln!("transfer download failed job_id={job_id} error={err}");
+            tracing::warn!(job_id, error = %err, "transfer download failed");
             let mut meta_updates = Map::new();
             meta_updates.insert("status".to_string(), Value::String("error".to_string()));
             meta_updates.insert("error".to_string(), Value::String(err.to_string()));
@@ -785,7 +820,7 @@ async fn _run_download_job_limited(
     let mut out_file = match fs::File::create(download_abs).await {
         Ok(file) => file,
         Err(err) => {
-            eprintln!("failed to create download file job_id={job_id} error={err}");
+            tracing::warn!(job_id, error = %err, "failed to create download file");
             update_state_error_and_broadcast(&state, job_id, &err.to_string(), "download failed")
                 .await;
             let mut callback = callback_payload.clone();
@@ -802,7 +837,7 @@ async fn _run_download_job_limited(
         let frame = match frame {
             Ok(frame) => frame,
             Err(err) => {
-                eprintln!("transfer download failed job_id={job_id} error={err}");
+                tracing::warn!(job_id, error = %err, "transfer download failed");
                 let _ = fs::remove_file(download_abs).await;
                 let mut meta_updates = Map::new();
                 meta_updates.insert("status".to_string(), Value::String("error".to_string()));
@@ -855,7 +890,7 @@ async fn _run_download_job_limited(
             }
         }
         if let Err(err) = out_file.write_all(&chunk).await {
-            eprintln!("transfer download write failed job_id={job_id} error={err}");
+            tracing::warn!(job_id, error = %err, "transfer download write failed");
             let _ = fs::remove_file(download_abs).await;
             update_state_error_and_broadcast(&state, job_id, &err.to_string(), "download failed")
                 .await;
@@ -954,6 +989,13 @@ async fn _run_download_job_limited(
     if let Some(unpacked_bytes) = unpacked_bytes {
         callback.insert("unpacked_bytes".to_string(), Value::from(unpacked_bytes));
     }
+    tracing::info!(
+        job_id,
+        bytes = downloaded,
+        total = ?total,
+        unpacked_bytes = ?unpacked_bytes,
+        "transfer download completed"
+    );
     state.notify_manager(callback).await;
     state.close_clients(job_id).await;
 }

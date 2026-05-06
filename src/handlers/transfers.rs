@@ -166,6 +166,10 @@ fn parse_pack_level(raw_value: Option<i64>, default: i64) -> u32 {
     level as u32
 }
 
+fn payload_string<'a>(payload: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+    payload.get(key).and_then(Value::as_str)
+}
+
 fn normalize_archive_mode(raw_value: Option<&Value>) -> Option<String> {
     let mode = raw_value?.as_str()?.trim().to_lowercase();
     if matches!(mode.as_str(), "create" | "replace") {
@@ -354,6 +358,20 @@ async fn build_upload_spec(
         callback_payload.insert("file_kind".to_string(), Value::String(file_kind.clone()));
     }
 
+    tracing::debug!(
+        job_id = %job_id,
+        transfer_kind = %transfer_kind,
+        callback_action = payload_string(&callback_payload, "callback_action").unwrap_or("-"),
+        mode = payload_string(&callback_payload, "mode").unwrap_or("-"),
+        condition = payload_string(&callback_payload, "condition").unwrap_or("-"),
+        target_path = payload_string(&callback_payload, "target_path").unwrap_or("-"),
+        pack_format = %pack_format,
+        pack_level,
+        storage_type = %storage_type,
+        file_kind = %file_kind,
+        "parsed transfer upload JWT"
+    );
+
     let default_name = if transfer_kind == "archive" {
         "upload.zip"
     } else {
@@ -446,10 +464,30 @@ async fn initialize_upload_job(
     );
     state.write_meta(&spec.job_id, Value::Object(meta)).await;
     state.set_stage(&spec.job_id, "uploading").await;
+    tracing::info!(
+        job_id = %spec.job_id,
+        transfer_kind = %spec.transfer_kind,
+        callback_action = payload_string(&spec.callback_payload, "callback_action").unwrap_or("-"),
+        mode = payload_string(&spec.callback_payload, "mode").unwrap_or("-"),
+        condition = payload_string(&spec.callback_payload, "condition").unwrap_or("-"),
+        total = ?total,
+        max_bytes = ?spec.max_bytes,
+        upload_path = %spec.upload_rel,
+        "transfer upload accepted"
+    );
     Ok(())
 }
 
 async fn notify_upload_error(state: &Arc<AppState>, spec: &UploadSpec, reason: &str) {
+    tracing::warn!(
+        job_id = %spec.job_id,
+        transfer_kind = %spec.transfer_kind,
+        callback_action = payload_string(&spec.callback_payload, "callback_action").unwrap_or("-"),
+        mode = payload_string(&spec.callback_payload, "mode").unwrap_or("-"),
+        condition = payload_string(&spec.callback_payload, "condition").unwrap_or("-"),
+        reason,
+        "transfer upload callback error"
+    );
     let mut payload = spec.callback_payload.clone();
     payload.insert("job_id".to_string(), Value::String(spec.job_id.clone()));
     payload.insert("status".to_string(), Value::String("error".to_string()));
@@ -779,9 +817,13 @@ async fn execute_transfer_upload_inner(
     let start_ts = Instant::now();
     let stream_result = stream_upload_body(&state, body, spec, total).await?;
     let duration = start_ts.elapsed().as_secs_f64();
-    eprintln!(
-        "transfer upload done job_id={} bytes={} duration={:.2}s",
-        spec.job_id, stream_result.downloaded, duration
+    tracing::info!(
+        job_id = %spec.job_id,
+        transfer_kind = %spec.transfer_kind,
+        bytes = stream_result.downloaded,
+        total = ?stream_result.final_total,
+        duration = duration,
+        "transfer upload completed"
     );
 
     let unpacked_bytes = if spec.transfer_kind == "archive" {
@@ -814,6 +856,17 @@ async fn execute_transfer_upload_inner(
     if let Some(unpacked_bytes) = unpacked_bytes {
         callback_success_payload.insert("unpacked_bytes".to_string(), Value::from(unpacked_bytes));
     }
+    tracing::info!(
+        job_id = %spec.job_id,
+        transfer_kind = %spec.transfer_kind,
+        callback_action = payload_string(&callback_success_payload, "callback_action").unwrap_or("-"),
+        mode = payload_string(&callback_success_payload, "mode").unwrap_or("-"),
+        condition = payload_string(&callback_success_payload, "condition").unwrap_or("-"),
+        bytes = stream_result.downloaded,
+        total = ?stream_result.final_total,
+        unpacked_bytes = ?unpacked_bytes,
+        "sending transfer success callback"
+    );
     state.notify_manager(callback_success_payload).await;
     Ok(Json(TransferUploadResponse {
         job_id: spec.job_id.clone(),
@@ -880,6 +933,11 @@ async fn start_transfer(state: Arc<AppState>, token: Option<String>) -> Response
 
     if let Some(existing) = state.read_job_state(&job_id).await {
         if existing.started {
+            tracing::info!(
+                job_id = %job_id,
+                status = %existing.status,
+                "transfer start already active"
+            );
             return Json(TransferStartResponse {
                 job_id,
                 status: existing.status,
@@ -948,6 +1006,18 @@ async fn start_transfer(state: Arc<AppState>, token: Option<String>) -> Response
                     .and_then(|value| value.as_bool())
                     .unwrap_or(false),
         ),
+    );
+
+    tracing::info!(
+        job_id = %job_id,
+        mod_id = ?mod_id.as_ref().and_then(|value| value.as_u64()),
+        pack_format = %pack_format,
+        pack_level = pack_level,
+        mode = payload_string(&callback_payload, "mode").unwrap_or("-"),
+        condition = payload_string(&callback_payload, "condition").unwrap_or("-"),
+        max_bytes = ?max_bytes,
+        download_path = %download_rel.to_string_lossy(),
+        "transfer start accepted"
     );
 
     let state_clone = state.clone();
@@ -1025,6 +1095,14 @@ pub async fn transfer_upload(
         });
 
     let Some(_permit) = state.upload_limiter.try_acquire() else {
+        tracing::warn!(
+            job_id = %spec.job_id,
+            transfer_kind = %spec.transfer_kind,
+            callback_action = payload_string(&spec.callback_payload, "callback_action").unwrap_or("-"),
+            mode = payload_string(&spec.callback_payload, "mode").unwrap_or("-"),
+            condition = payload_string(&spec.callback_payload, "condition").unwrap_or("-"),
+            "transfer upload rejected: busy"
+        );
         notify_upload_error(&state, &spec, "busy").await;
         return busy_response();
     };
@@ -1036,6 +1114,15 @@ pub async fn transfer_upload(
         Some(timeout) => match tokio::time::timeout(timeout, upload_future).await {
             Ok(response) => response,
             Err(_) => {
+                tracing::warn!(
+                    job_id = %spec.job_id,
+                    transfer_kind = %spec.transfer_kind,
+                    callback_action = payload_string(&spec.callback_payload, "callback_action").unwrap_or("-"),
+                    mode = payload_string(&spec.callback_payload, "mode").unwrap_or("-"),
+                    condition = payload_string(&spec.callback_payload, "condition").unwrap_or("-"),
+                    timeout_seconds = timeout.as_secs_f64(),
+                    "transfer upload rejected: timeout"
+                );
                 notify_upload_error(&state, &spec, "timeout").await;
                 state.close_clients(&spec.job_id).await;
                 state.job_error_cleanup(&spec.job_id, "timeout").await;
@@ -1091,6 +1178,12 @@ pub async fn transfer_repack(
         return error_response(StatusCode::BAD_REQUEST, "Unsupported format");
     }
     let pack_level = parse_pack_level(form.compression_level, 3);
+    tracing::info!(
+        job_id = %form.job_id,
+        pack_format = %pack_format,
+        pack_level = pack_level,
+        "transfer repack requested"
+    );
     let (repack_ok, packed_rel, packed_bytes, unpacked_bytes, repack_reason) =
         transfer_jobs::run_repack_job(
             state.clone(),
@@ -1103,15 +1196,34 @@ pub async fn transfer_repack(
     if !repack_ok {
         return match repack_reason.as_deref() {
             Some("encrypted_zip") => {
+                tracing::warn!(job_id = %form.job_id, "transfer repack rejected: encrypted zip");
                 error_response(StatusCode::BAD_REQUEST, "Encrypted zip not allowed")
             }
             Some("unpacked_size_limit") => {
+                tracing::warn!(job_id = %form.job_id, "transfer repack rejected: unpacked size limit");
                 error_response(StatusCode::PAYLOAD_TOO_LARGE, "Archive too large")
             }
-            Some("busy") => busy_response(),
-            _ => error_response(StatusCode::INTERNAL_SERVER_ERROR, "Repack failed"),
+            Some("busy") => {
+                tracing::warn!(job_id = %form.job_id, "transfer repack rejected: busy");
+                busy_response()
+            }
+            _ => {
+                tracing::warn!(
+                    job_id = %form.job_id,
+                    reason = ?repack_reason,
+                    "transfer repack failed"
+                );
+                error_response(StatusCode::INTERNAL_SERVER_ERROR, "Repack failed")
+            }
         };
     }
+    tracing::info!(
+        job_id = %form.job_id,
+        packed_path = ?packed_rel,
+        packed_bytes = ?packed_bytes,
+        unpacked_bytes = ?unpacked_bytes,
+        "transfer repack completed"
+    );
 
     Json(TransferRepackResponse {
         job_id: form.job_id,
@@ -1137,6 +1249,12 @@ pub async fn transfer_move(
     if !is_allowed_type(&form.storage_type) {
         return error_response(StatusCode::BAD_REQUEST, "Invalid type");
     }
+    tracing::info!(
+        job_id = %form.job_id,
+        storage_type = %form.storage_type,
+        target_path = %form.target_path,
+        "transfer move requested"
+    );
 
     let Some(meta) = state.read_meta(&form.job_id).await else {
         return error_response(StatusCode::NOT_FOUND, "Job not found");
@@ -1155,6 +1273,13 @@ pub async fn transfer_move(
         let _ = fs::create_dir_all(parent).await;
     }
     if let Err(err) = fs::rename(&packed_abs, &real_path).await {
+        tracing::warn!(
+            job_id = %form.job_id,
+            storage_type = %form.storage_type,
+            target_path = %form.target_path,
+            error = %err,
+            "transfer move failed"
+        );
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
     }
     let final_rel = real_path
@@ -1177,6 +1302,13 @@ pub async fn transfer_move(
         state.write_meta(&form.job_id, meta).await;
     }
     state.delete_job_and_dir(&form.job_id).await;
+    tracing::info!(
+        job_id = %form.job_id,
+        storage_type = %form.storage_type,
+        final_path = %final_rel,
+        final_bytes = final_bytes,
+        "transfer move completed"
+    );
 
     Json(TransferMoveResponse {
         job_id: form.job_id,

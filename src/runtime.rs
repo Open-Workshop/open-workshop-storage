@@ -483,6 +483,51 @@ impl AppState {
     }
 
     pub async fn notify_manager(&self, payload: Map<String, Value>) {
+        let job_id = payload
+            .get("job_id")
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_string();
+        let status = payload
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_string();
+        let reason = payload
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_string();
+        let transfer_kind = payload
+            .get("transfer_kind")
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_string();
+        let callback_action = payload
+            .get("callback_action")
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_string();
+        let mode = payload
+            .get("mode")
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_string();
+        let condition = payload
+            .get("condition")
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_string();
+        tracing::info!(
+            job_id = %job_id,
+            status = %status,
+            reason = %reason,
+            transfer_kind = %transfer_kind,
+            callback_action = %callback_action,
+            mode = %mode,
+            condition = %condition,
+            "sending transfer callback"
+        );
         let Some(token) = auth::encode_transfer_jwt(
             &self.config,
             &payload,
@@ -516,6 +561,28 @@ impl AppState {
                 .transfer_callback_timeout_seconds
                 .unwrap_or(30.0) as u64,
         );
-        let _ = tokio::time::timeout(timeout, client.request(request)).await;
+        match tokio::time::timeout(timeout, client.request(request)).await {
+            Ok(Ok(response)) => {
+                tracing::info!(
+                    job_id = %job_id,
+                    status_code = %response.status(),
+                    "transfer callback delivered"
+                );
+            }
+            Ok(Err(err)) => {
+                tracing::warn!(
+                    job_id = %job_id,
+                    error = %err,
+                    "transfer callback request failed"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    job_id = %job_id,
+                    timeout_seconds = timeout.as_secs_f64(),
+                    "transfer callback timed out"
+                );
+            }
+        }
     }
 }
