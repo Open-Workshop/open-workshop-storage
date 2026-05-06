@@ -12,7 +12,7 @@ blurhash = "0.2.3"
 anyhow = "1"
 futures-util = "0.3"
 hmac = "0.12"
-image = { version = "0.24.1", default-features = false, features = ["webp"] }
+image = { version = "0.24.1", default-features = false, features = ["jpeg", "png", "webp"] }
 lru = "0.12"
 bytes = "1"
 http-body-util = "0.1"

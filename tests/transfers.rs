@@ -11,6 +11,9 @@ use axum::routing::get;
 use axum::Router;
 use bytes::Bytes;
 use futures_util::stream;
+use image::codecs::jpeg::JpegEncoder;
+use image::codecs::png::PngEncoder;
+use image::{ColorType, ImageEncoder, Rgb, RgbImage, Rgba, RgbaImage};
 use open_workshop_storage::state::{new_job_state, WsClientHandle};
 use open_workshop_storage::transfer_jobs::{run_download_job, run_repack_job};
 use open_workshop_storage::web::{build_distributor_router, build_loader_router};
@@ -112,6 +115,37 @@ fn transfer_upload_payload(job_id: &str) -> Map<String, Value> {
     payload.insert("mod_id".to_string(), Value::from(123));
     payload.insert("pack_format".to_string(), Value::String("zip".to_string()));
     payload.insert("pack_level".to_string(), Value::from(3));
+    payload
+}
+
+fn transfer_upload_image_payload(job_id: &str) -> Map<String, Value> {
+    let mut payload = Map::new();
+    payload.insert("job_id".to_string(), Value::String(job_id.to_string()));
+    payload.insert(
+        "transfer_kind".to_string(),
+        Value::String("img".to_string()),
+    );
+    payload.insert(
+        "storage_type".to_string(),
+        Value::String("resource".to_string()),
+    );
+    payload.insert("file_kind".to_string(), Value::String("img".to_string()));
+    payload.insert(
+        "callback_action".to_string(),
+        Value::String("resource_add".to_string()),
+    );
+    payload.insert(
+        "callback_context".to_string(),
+        Value::Object(
+            [("resource_id".to_string(), Value::from(327138))]
+                .into_iter()
+                .collect(),
+        ),
+    );
+    payload.insert(
+        "target_path".to_string(),
+        Value::String("mods/155491/327138.webp".to_string()),
+    );
     payload
 }
 
@@ -408,6 +442,166 @@ async fn transfer_upload_times_out_and_cleans_up() {
     assert_eq!(
         callback.get("condition").and_then(Value::as_str),
         Some("draft")
+    );
+}
+
+#[tokio::test]
+async fn transfer_upload_accepts_png_and_converts_it_to_webp() {
+    let dir = temp_dir("transfer-upload-png");
+    let (callback_server, callbacks) = spawn_callback_capture_server().await;
+    let mut config = test_config(dir.path());
+    config.manager_transfer_callback_url = Some(format!("{}/callback", callback_server.base_url));
+    let state = test_state_with_config(config);
+    let app = build_loader_router(state.clone());
+    let job_id = "p".repeat(32);
+    let token = transfer_token(
+        state.config.as_ref(),
+        &transfer_upload_image_payload(&job_id),
+        "storage",
+        60,
+    );
+    let auth_header = format!("Bearer {token}");
+
+    let mut image = RgbaImage::new(1, 1);
+    image.put_pixel(0, 0, Rgba([255, 64, 0, 255]));
+    let mut png_bytes = Vec::new();
+    let encoder = PngEncoder::new(&mut png_bytes);
+    encoder
+        .write_image(image.as_raw(), 1, 1, ColorType::Rgba8.into())
+        .expect("encode png");
+
+    let response = call_with_headers(
+        &app,
+        Method::POST,
+        &format!(
+            "/transfer/upload?token={token}&filename=image.png&size={}",
+            png_bytes.len()
+        ),
+        &[
+            ("authorization", auth_header.as_str()),
+            ("x-file-name", "image.png"),
+        ],
+        Body::from(png_bytes.clone()),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: Value =
+        serde_json::from_slice(&response_bytes(response).await).expect("parse json");
+    assert_eq!(
+        payload.get("job_id").and_then(Value::as_str),
+        Some(job_id.as_str())
+    );
+    assert_eq!(
+        payload.get("bytes").and_then(Value::as_u64),
+        Some(png_bytes.len() as u64)
+    );
+    assert_eq!(
+        payload.get("total").and_then(Value::as_u64),
+        Some(png_bytes.len() as u64)
+    );
+
+    let packed_abs = state.temp_dir.join(&job_id).join("packed.webp");
+    let packed_bytes = std::fs::read(&packed_abs).expect("read packed webp");
+    assert!(packed_bytes.starts_with(b"RIFF"));
+    assert_eq!(packed_bytes.get(8..12), Some(&b"WEBP"[..]));
+    let decoded = image::load_from_memory(&packed_bytes).expect("decode webp");
+    assert_eq!(decoded.width(), 1);
+    assert_eq!(decoded.height(), 1);
+
+    let callbacks = callbacks.lock().await;
+    let callback = callbacks.last().expect("callback payload");
+    assert_eq!(
+        callback.get("status").and_then(Value::as_str),
+        Some("success")
+    );
+    assert_eq!(
+        callback.get("transfer_kind").and_then(Value::as_str),
+        Some("img")
+    );
+    assert_eq!(
+        callback.get("packed_format").and_then(Value::as_str),
+        Some("webp")
+    );
+}
+
+#[tokio::test]
+async fn transfer_upload_accepts_jpeg_and_converts_it_to_webp() {
+    let dir = temp_dir("transfer-upload-jpeg");
+    let (callback_server, callbacks) = spawn_callback_capture_server().await;
+    let mut config = test_config(dir.path());
+    config.manager_transfer_callback_url = Some(format!("{}/callback", callback_server.base_url));
+    let state = test_state_with_config(config);
+    let app = build_loader_router(state.clone());
+    let job_id = "j".repeat(32);
+    let token = transfer_token(
+        state.config.as_ref(),
+        &transfer_upload_image_payload(&job_id),
+        "storage",
+        60,
+    );
+    let auth_header = format!("Bearer {token}");
+
+    let mut image = RgbImage::new(1, 1);
+    image.put_pixel(0, 0, Rgb([255, 64, 0]));
+    let mut jpeg_bytes = Vec::new();
+    let encoder = JpegEncoder::new(&mut jpeg_bytes);
+    encoder
+        .write_image(image.as_raw(), 1, 1, ColorType::Rgb8.into())
+        .expect("encode jpeg");
+
+    let response = call_with_headers(
+        &app,
+        Method::POST,
+        &format!(
+            "/transfer/upload?token={token}&filename=image.jpg&size={}",
+            jpeg_bytes.len()
+        ),
+        &[
+            ("authorization", auth_header.as_str()),
+            ("x-file-name", "image.jpg"),
+        ],
+        Body::from(jpeg_bytes.clone()),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: Value =
+        serde_json::from_slice(&response_bytes(response).await).expect("parse json");
+    assert_eq!(
+        payload.get("job_id").and_then(Value::as_str),
+        Some(job_id.as_str())
+    );
+    assert_eq!(
+        payload.get("bytes").and_then(Value::as_u64),
+        Some(jpeg_bytes.len() as u64)
+    );
+    assert_eq!(
+        payload.get("total").and_then(Value::as_u64),
+        Some(jpeg_bytes.len() as u64)
+    );
+
+    let packed_abs = state.temp_dir.join(&job_id).join("packed.webp");
+    let packed_bytes = std::fs::read(&packed_abs).expect("read packed webp");
+    assert!(packed_bytes.starts_with(b"RIFF"));
+    assert_eq!(packed_bytes.get(8..12), Some(&b"WEBP"[..]));
+    let decoded = image::load_from_memory(&packed_bytes).expect("decode webp");
+    assert_eq!(decoded.width(), 1);
+    assert_eq!(decoded.height(), 1);
+
+    let callbacks = callbacks.lock().await;
+    let callback = callbacks.last().expect("callback payload");
+    assert_eq!(
+        callback.get("status").and_then(Value::as_str),
+        Some("success")
+    );
+    assert_eq!(
+        callback.get("transfer_kind").and_then(Value::as_str),
+        Some("img")
+    );
+    assert_eq!(
+        callback.get("packed_format").and_then(Value::as_str),
+        Some("webp")
     );
 }
 
