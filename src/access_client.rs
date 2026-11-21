@@ -7,6 +7,9 @@ use http_body_util::{BodyExt as _, Full};
 use hyper::body::Incoming;
 use hyper::StatusCode;
 use serde::Deserialize;
+use opentelemetry::{global, Context, KeyValue};
+use opentelemetry::propagation::Injector;
+use opentelemetry::trace::{FutureExt, SpanKind, Status, TraceContextExt, Tracer};
 
 use crate::http_client::build_hyper_client;
 
@@ -96,12 +99,52 @@ pub async fn resolve_mod_download_access(
     access_service_url: &str,
     timeout_seconds: u64,
 ) -> Result<ModDownloadAccessResult, AccessServiceError> {
+    let tracer = global::tracer("open-workshop-storage.access");
+    let span = tracer.span_builder("POST /mod/{mod_id}")
+        .with_kind(SpanKind::Client)
+        .with_attributes(vec![KeyValue::new("http.request.method", "POST"), KeyValue::new("http.route", "/mod/{mod_id}")])
+        .start(&tracer);
+    let context = Context::current_with_span(span);
+    let result = resolve_mod_download_access_inner(request_headers, mod_id, access_service_url, timeout_seconds)
+        .with_context(context.clone()).await;
+    let span = context.span();
+    match &result {
+        Ok(_) => span.set_attribute(KeyValue::new("http.response.status_code", 200_i64)),
+        Err(error) => {
+            if let Some(code) = error.status_code { span.set_attribute(KeyValue::new("http.response.status_code", i64::from(code))); }
+            span.set_status(Status::error("access request failed"));
+        }
+    }
+    span.end();
+    result
+}
+
+struct TraceHeaders<'a>(&'a mut HeaderMap);
+impl Injector for TraceHeaders<'_> {
+    fn set(&mut self, key: &str, value: String) {
+        if let (Ok(name), Ok(value)) = (axum::http::header::HeaderName::try_from(key), HeaderValue::try_from(value)) {
+            self.0.insert(name, value);
+        }
+    }
+}
+
+async fn resolve_mod_download_access_inner(
+    request_headers: &HeaderMap,
+    mod_id: u64,
+    access_service_url: &str,
+    timeout_seconds: u64,
+) -> Result<ModDownloadAccessResult, AccessServiceError> {
     let url = format!("{}/mod/{mod_id}", access_service_url.trim_end_matches('/'));
     let uri: Uri = url.parse::<Uri>().map_err(|err| AccessServiceError {
         message: err.to_string(),
         status_code: Some(503),
         response_text: None,
     })?;
+    if let Some(host) = uri.host() {
+        let span = Context::current();
+        span.span().set_attribute(KeyValue::new("server.address", host.to_owned()));
+        if let Some(port) = uri.port_u16() { span.span().set_attribute(KeyValue::new("server.port", i64::from(port))); }
+    }
     let timeout = Duration::from_secs(timeout_seconds.max(1));
 
     let client = build_hyper_client();
@@ -127,6 +170,8 @@ pub async fn resolve_mod_download_access(
                 })?,
         );
     }
+
+    global::get_text_map_propagator(|propagator| propagator.inject_context(&Context::current(), &mut TraceHeaders(request_builder.headers_mut())));
 
     let response = match tokio::time::timeout(timeout, client.request(request_builder)).await {
         Ok(Ok(response)) => response,
