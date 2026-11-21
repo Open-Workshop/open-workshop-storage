@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 
 use open_workshop_storage::config::AppConfig;
 use open_workshop_storage::runtime::AppState;
+use open_workshop_storage::telemetry;
 use open_workshop_storage::web::build_loader_router;
 
 fn init_tracing() {
@@ -16,6 +17,9 @@ fn init_tracing() {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
+    let _telemetry = tokio::task::spawn_blocking(|| telemetry::init("open-workshop-storage-loader"))
+        .await
+        .unwrap_or(None);
     let config = AppConfig::load();
     let state = AppState::new(config)?;
     let app = build_loader_router(state);

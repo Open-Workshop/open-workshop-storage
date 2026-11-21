@@ -11,6 +11,7 @@ use axum::Router;
 use crate::handlers::{files, transfers};
 use crate::openapi_docs;
 use crate::runtime::AppState;
+use crate::telemetry;
 
 async fn cors_middleware(req: axum::http::Request<Body>, next: Next) -> Response {
     if req.method() == Method::OPTIONS {
@@ -75,6 +76,7 @@ pub fn build_distributor_router(state: Arc<AppState>) -> Router {
         )
         .layer(axum::extract::Extension(state))
         .layer(middleware::from_fn(cors_middleware))
+        .layer(middleware::from_fn(telemetry::trace_request))
 }
 
 pub fn build_loader_router(state: Arc<AppState>) -> Router {
@@ -92,4 +94,5 @@ pub fn build_loader_router(state: Arc<AppState>) -> Router {
         .route("/transfer/move", post(transfers::transfer_move))
         .layer(axum::extract::Extension(state))
         .layer(middleware::from_fn(cors_middleware))
+        .layer(middleware::from_fn(telemetry::trace_request))
 }

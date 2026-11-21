@@ -14,5 +14,6 @@ pub mod openapi_docs;
 pub mod redis_store;
 pub mod runtime;
 pub mod state;
+pub mod telemetry;
 pub mod transfer_jobs;
 pub mod web;

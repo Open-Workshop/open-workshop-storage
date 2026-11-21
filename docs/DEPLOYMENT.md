@@ -97,5 +97,9 @@ sudo systemctl restart open-workshop-storage-loader open-workshop-storage-distri
 ## Notes
 
 - `check_access` from the old Python config is not used by the Rust storage service.
-- `UPTRACE_*` and `OTEL_*` variables from the old setup are not wired up in the current Rust code.
+- Set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` to an OTLP/HTTP traces endpoint to enable
+  request tracing for the loader and distributor. The endpoint should be a trusted
+  collector, for example `http://127.0.0.1:14318/v1/traces` when a local tunnel is
+  configured. Without it, the services run normally without exporting traces.
+- Traces use route templates and omit query strings and request bodies.
 - If you want to use Redis-backed shared state, set `REDIS_URL`; otherwise the service falls back to in-memory state.
