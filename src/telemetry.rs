@@ -1,5 +1,5 @@
 //! Optional request traces. Paths use route templates and omit query strings.
-use axum::body::Body;
+use axum::body::{Body, HttpBody};
 use axum::extract::MatchedPath;
 use axum::http::{HeaderMap, Request, Uri};
 use axum::middleware::Next;
@@ -13,6 +13,8 @@ use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
 use tracing::Instrument;
+use std::pin::Pin;
+use std::task::{Context as TaskContext, Poll};
 
 struct Headers<'a>(&'a HeaderMap);
 impl Extractor for Headers<'_> {
@@ -67,6 +69,100 @@ pub fn client_http_attributes(uri: &Uri) -> Vec<KeyValue> {
     attributes
 }
 
+/// Keep the server span open until Hyper has consumed or dropped the body.
+struct TracedBody {
+    inner: Body,
+    context: Option<Context>,
+    transfer_context: Option<Context>,
+    log_scope: tracing::Span,
+    sent_bytes: u64,
+    expected_bytes: Option<u64>,
+    completed: bool,
+}
+
+impl TracedBody {
+    fn finish(&mut self) {
+        if let Some(context) = self.transfer_context.take() {
+            let span = context.span();
+            span.set_attribute(KeyValue::new("ow.transfer.bytes_sent", self.sent_bytes as i64));
+            if let Some(expected) = self.expected_bytes {
+                if expected > 0 {
+                    let percent = (self.sent_bytes as f64 / expected as f64 * 100.0).min(100.0);
+                    span.set_attribute(KeyValue::new("ow.transfer.percent_sent", percent));
+                }
+            }
+            let complete = self.completed || self.expected_bytes == Some(self.sent_bytes);
+            span.set_attribute(KeyValue::new("ow.transfer.result", if complete { "complete" } else { "interrupted" }));
+            span.end();
+        }
+        if let Some(context) = self.context.take() {
+            let _guard = context.attach();
+            let _scope = self.log_scope.enter();
+            Context::current().span().set_attribute(KeyValue::new("http.response.body.size", self.sent_bytes as i64));
+            tracing::info!(bytes = self.sent_bytes, "HTTP response body finished");
+            Context::current().span().end();
+        }
+    }
+}
+
+impl HttpBody for TracedBody {
+    type Data = bytes::Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        let result = Pin::new(&mut self.inner).poll_frame(cx);
+        match &result {
+            Poll::Ready(Some(Ok(frame))) => {
+                if let Some(data) = frame.data_ref() { self.sent_bytes = self.sent_bytes.saturating_add(data.len() as u64); }
+                if self.inner.is_end_stream() { self.completed = true; self.finish(); }
+            }
+            Poll::Ready(Some(Err(_))) => {
+                if let Some(context) = &self.context { context.span().set_status(Status::error("HTTP response body failed")); }
+                self.finish();
+            }
+            Poll::Ready(None) => { self.completed = true; self.finish(); },
+            Poll::Pending => {}
+        }
+        result
+    }
+
+    fn is_end_stream(&self) -> bool { self.inner.is_end_stream() }
+    fn size_hint(&self) -> http_body::SizeHint { self.inner.size_hint() }
+}
+
+impl Drop for TracedBody {
+    fn drop(&mut self) { self.finish(); }
+}
+
+/// Extract IDs only from documented storage paths, never from query parameters.
+fn file_attributes(path: &str, expected: Option<u64>, content_type: Option<&str>) -> Vec<KeyValue> {
+    let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+    let mut result = Vec::new();
+    if parts.len() < 3 || parts[0] != "download" { return result; }
+    result.push(KeyValue::new("ow.storage.type", parts[1].to_owned()));
+    if let Some(size) = expected.and_then(|n| i64::try_from(n).ok()) { result.push(KeyValue::new("file.size", size)); }
+    if let Some(mime) = content_type { result.push(KeyValue::new("http.response.mime_type", mime.to_owned())); }
+    let filename = parts.last().copied().unwrap_or("");
+    if let Some((stem, ext)) = filename.rsplit_once('.') {
+        if !ext.is_empty() && ext.len() <= 12 && ext.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            result.push(KeyValue::new("file.extension", ext.to_ascii_lowercase()));
+        }
+        if parts.len() == 5 && matches!(parts[2], "mods" | "modpacks" | "games" | "profiles")
+            && !parts[3].is_empty() && parts[3].bytes().all(|b| b.is_ascii_digit()) {
+            let kind = match parts[2] { "mods" => "mod", "modpacks" => "modpack", "games" => "game", _ => "user" };
+            result.push(KeyValue::new("ow.owner.type", kind));
+            result.push(KeyValue::new("ow.owner.id", parts[3].to_owned()));
+            if !stem.is_empty() && stem.len() <= 64 && stem.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+                result.push(KeyValue::new("ow.resource.id", stem.to_owned()));
+            }
+        } else if parts.len() == 3 && parts[1] == "avatar" && !stem.is_empty() && stem.bytes().all(|b| b.is_ascii_digit()) {
+            result.push(KeyValue::new("ow.owner.type", "user"));
+            result.push(KeyValue::new("ow.owner.id", stem.to_owned()));
+        }
+    }
+    result
+}
+
 pub async fn trace_request(req: Request<Body>, next: Next) -> Response {
     if req.uri().path() == "/healthz" {
         return next.run(req).await;
@@ -85,7 +181,7 @@ pub async fn trace_request(req: Request<Body>, next: Next) -> Response {
     let mut attributes = vec![
         KeyValue::new("http.request.method", method.clone()),
         KeyValue::new("http.route", route.clone()),
-        KeyValue::new("url.path", path),
+        KeyValue::new("url.path", path.clone()),
         KeyValue::new("url.scheme", scheme.clone()),
     ];
     if let Some(authority) = authority {
@@ -106,16 +202,27 @@ pub async fn trace_request(req: Request<Body>, next: Next) -> Response {
     );
     let response = async move {
         let response = next.run(req).await;
-        tracing::info!(status = response.status().as_u16(), "HTTP request completed");
+        tracing::info!(status = response.status().as_u16(), "HTTP response headers ready");
         response
-    }.with_context(context.clone()).instrument(log_scope).await;
+    }.with_context(context.clone()).instrument(log_scope.clone()).await;
     let span = context.span();
     span.set_attribute(KeyValue::new("http.response.status_code", i64::from(response.status().as_u16())));
     if response.status().is_server_error() {
         span.set_status(Status::error("HTTP server error"));
     }
-    span.end();
-    response
+    let expected_bytes = response.headers().get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok()).and_then(|value| value.parse::<u64>().ok());
+    let content_type = response.headers().get(axum::http::header::CONTENT_TYPE).and_then(|value| value.to_str().ok());
+    let transfer_context = if method == "GET" && route == "/download/:storage_type/*path" && response.status().is_success() {
+        let span = tracer.span_builder("Send file to Nginx")
+            .with_kind(SpanKind::Internal)
+            .with_attributes(file_attributes(&path, expected_bytes, content_type))
+            .start_with_context(&tracer, &context);
+        Some(context.with_span(span))
+    } else { None };
+    let (parts, body) = response.into_parts();
+    let traced_body = TracedBody { inner: body, context: Some(context.clone()), transfer_context, log_scope, sent_bytes: 0, expected_bytes, completed: false };
+    Response::from_parts(parts, Body::new(traced_body))
 }
 
 #[cfg(test)]

@@ -16,6 +16,7 @@ image = { version = "0.24.1", default-features = false, features = ["jpeg", "png
 lru = "0.12"
 bytes = "1"
 http-body-util = "0.1"
+http-body = "1"
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 hyper-rustls = { version = "0.27", features = ["webpki-roots"] }
