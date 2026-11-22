@@ -11,6 +11,8 @@ use bytes::Bytes;
 use futures_util::FutureExt;
 use http_body_util::Full;
 use lru::LruCache;
+use opentelemetry::{global, Context, KeyValue};
+use opentelemetry::trace::{FutureExt as OtelFutureExt, SpanKind, Status, TraceContextExt, Tracer};
 use serde_json::{Map, Value};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -544,7 +546,7 @@ impl AppState {
             Err(_) => return,
         };
         let client = build_hyper_client();
-        let request = match Request::post(uri)
+        let mut request = match Request::post(uri.clone())
             .header(AUTHORIZATION, format!("Bearer {token}"))
             .header(CONTENT_TYPE, "application/json")
             .body(Full::new(Bytes::from(body)))
@@ -557,7 +559,28 @@ impl AppState {
                 .transfer_callback_timeout_seconds
                 .unwrap_or(30.0) as u64,
         );
-        match tokio::time::timeout(timeout, client.request(request)).await {
+        let tracer = global::tracer("open-workshop-storage.manager");
+        let mut attributes = crate::telemetry::client_http_attributes(&uri);
+        attributes.push(KeyValue::new("http.request.method", "POST"));
+        let span = tracer.span_builder("POST /internal/storage/transfer-completions")
+            .with_kind(SpanKind::Client).with_attributes(attributes).start(&tracer);
+        let context = Context::current_with_span(span);
+        global::get_text_map_propagator(|propagator| propagator.inject_context(
+            &context, &mut crate::access_client::TraceHeaders(request.headers_mut())
+        ));
+        let result = tokio::time::timeout(timeout, client.request(request))
+            .with_context(context.clone()).await;
+        match &result {
+            Ok(Ok(response)) => {
+                context.span().set_attribute(KeyValue::new("http.response.status_code", i64::from(response.status().as_u16())));
+                if response.status().is_client_error() || response.status().is_server_error() {
+                    context.span().set_status(Status::error("manager callback failed"));
+                }
+            }
+            _ => context.span().set_status(Status::error("manager callback failed")),
+        }
+        context.span().end();
+        match result {
             Ok(Ok(response)) => {
                 tracing::info!(
                     job_id = %job_id,

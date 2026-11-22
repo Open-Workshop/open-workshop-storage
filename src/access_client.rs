@@ -119,7 +119,7 @@ pub async fn resolve_mod_download_access(
     result
 }
 
-struct TraceHeaders<'a>(&'a mut HeaderMap);
+pub(crate) struct TraceHeaders<'a>(pub(crate) &'a mut HeaderMap);
 impl Injector for TraceHeaders<'_> {
     fn set(&mut self, key: &str, value: String) {
         if let (Ok(name), Ok(value)) = (axum::http::header::HeaderName::try_from(key), HeaderValue::try_from(value)) {
@@ -140,10 +140,9 @@ async fn resolve_mod_download_access_inner(
         status_code: Some(503),
         response_text: None,
     })?;
-    if let Some(host) = uri.host() {
-        let span = Context::current();
-        span.span().set_attribute(KeyValue::new("server.address", host.to_owned()));
-        if let Some(port) = uri.port_u16() { span.span().set_attribute(KeyValue::new("server.port", i64::from(port))); }
+    let context = Context::current();
+    for attribute in crate::telemetry::client_http_attributes(&uri) {
+        context.span().set_attribute(attribute);
     }
     let timeout = Duration::from_secs(timeout_seconds.max(1));
 
