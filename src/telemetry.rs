@@ -164,7 +164,9 @@ fn file_attributes(path: &str, expected: Option<u64>, content_type: Option<&str>
 }
 
 pub async fn trace_request(req: Request<Body>, next: Next) -> Response {
-    if req.uri().path() == "/healthz" {
+    // Keep proxy-originated health checks connected on the service map, while
+    // avoiding standalone traces for local probes without a trace context.
+    if req.uri().path() == "/healthz" && !req.headers().contains_key("traceparent") {
         return next.run(req).await;
     }
     let method = req.method().as_str().to_owned();

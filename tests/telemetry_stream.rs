@@ -81,4 +81,18 @@ async fn server_span_stays_open_until_streamed_body_finishes() {
                          ("ow.transfer.bytes_sent", "2"), ("ow.transfer.percent_sent", "40"), ("ow.transfer.result", "interrupted")] {
         assert!(transfer.attributes.iter().any(|v| v.key.as_str() == key && v.value.to_string() == value), "missing {key}");
     }
+    let before = spans.len();
+    drop(spans);
+    let app = Router::new().route("/healthz", get(|| async { "ok" }))
+        .layer(middleware::from_fn(open_workshop_storage::telemetry::trace_request));
+    let response = app.clone().oneshot(axum::http::Request::builder().uri("/healthz").body(Body::empty()).unwrap()).await.unwrap();
+    drop(response);
+    assert_eq!(shared_spans.lock().unwrap().len(), before);
+    let response = app.oneshot(axum::http::Request::builder().uri("/healthz")
+        .header("traceparent", "00-11111111111111111111111111111111-2222222222222222-01")
+        .body(Body::empty()).unwrap()).await.unwrap();
+    drop(response);
+    let spans = shared_spans.lock().unwrap();
+    let health = spans.iter().find(|s| s.name == "GET /healthz").unwrap();
+    assert_eq!(health.parent_span_id.to_string(), "2222222222222222");
 }
