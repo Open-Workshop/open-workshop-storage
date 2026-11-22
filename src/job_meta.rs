@@ -11,7 +11,7 @@ pub async fn update_job_meta(
     warning_message: &str,
 ) {
     let Some(mut meta) = state.read_meta(job_id).await else {
-        eprintln!("{} job_id={}", warning_message.replace("%s", "{}"), job_id);
+        tracing::warn!(job_id, "{}", warning_message.replace("%s", "{}"));
         return;
     };
     if let Some(map) = meta.as_object_mut() {
@@ -21,5 +21,5 @@ pub async fn update_job_meta(
         state.write_meta(job_id, meta).await;
         return;
     }
-    eprintln!("{} job_id={}", warning_message.replace("%s", "{}"), job_id);
+    tracing::warn!(job_id, "{}", warning_message.replace("%s", "{}"));
 }

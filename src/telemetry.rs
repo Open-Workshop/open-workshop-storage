@@ -12,6 +12,7 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
+use tracing::Instrument;
 
 struct Headers<'a>(&'a HeaderMap);
 impl Extractor for Headers<'_> {
@@ -68,7 +69,17 @@ pub async fn trace_request(req: Request<Body>, next: Next) -> Response {
         ])
         .start_with_context(&tracer, &parent);
     let context = Context::current_with_span(span);
-    let response = next.run(req).with_context(context.clone()).await;
+    let span_context = context.span().span_context().clone();
+    let log_scope = tracing::info_span!(
+        "request",
+        trace_id = %span_context.trace_id(),
+        span_id = %span_context.span_id(),
+    );
+    let response = async move {
+        let response = next.run(req).await;
+        tracing::info!(status = response.status().as_u16(), "HTTP request completed");
+        response
+    }.with_context(context.clone()).instrument(log_scope).await;
     let span = context.span();
     span.set_attribute(KeyValue::new("http.response.status_code", i64::from(response.status().as_u16())));
     if response.status().is_server_error() {

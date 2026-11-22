@@ -10,6 +10,8 @@ use axum::http::header::{AUTHORIZATION, CONTENT_LENGTH};
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Json, Response};
 use futures_util::{SinkExt, StreamExt};
+use opentelemetry::trace::FutureExt;
+use tracing::Instrument;
 use http_body_util::BodyExt as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -1023,6 +1025,7 @@ async fn start_transfer(state: Arc<AppState>, token: Option<String>) -> Response
     let state_clone = state.clone();
     let download_url = download_url.to_string();
     let job_id_for_task = job_id.clone();
+    let parent_context = opentelemetry::Context::current();
     tokio::spawn(async move {
         transfer_jobs::run_download_job(
             state_clone,
@@ -1033,7 +1036,7 @@ async fn start_transfer(state: Arc<AppState>, token: Option<String>) -> Response
             callback_payload,
         )
         .await;
-    });
+    }.with_context(parent_context).in_current_span());
 
     Json(TransferStartResponse {
         job_id: job_id.clone(),

@@ -146,7 +146,7 @@ pub async fn run_cleanup(state: &Arc<AppState>) {
 
     for job_id in jobs_to_remove {
         state.delete_job_and_dir(&job_id).await;
-        eprintln!("cleanup removed inactive job job_id={job_id}");
+        tracing::info!(job_id, "cleanup removed inactive job");
     }
 
     let temp_dir = state.temp_dir.clone();
@@ -174,11 +174,11 @@ pub async fn run_cleanup(state: &Arc<AppState>) {
                 if now - modified_secs >= cleanup_threshold as f64 {
                     let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(job_path))
                         .await;
-                    eprintln!("cleanup removed old dir job_id={job_folder}");
+                    tracing::info!(job_id = %job_folder, "cleanup removed old dir");
                 }
             }
             Err(_) => {
-                eprintln!("failed to check/cleanup old dir job_id={job_folder}");
+                tracing::warn!(job_id = %job_folder, "failed to check/cleanup old dir");
             }
         }
     }
@@ -324,7 +324,7 @@ async fn _run_repack_job_limited(
             "failed to update meta for job_id=%s",
         )
         .await;
-        eprintln!("transfer repack denied (encrypted zip) job_id={job_id}");
+        tracing::warn!(job_id, "transfer repack denied (encrypted zip)");
         return (
             false,
             None,
@@ -363,9 +363,7 @@ async fn _run_repack_job_limited(
                 "failed to update meta for job_id=%s",
             )
             .await;
-            eprintln!(
-                "transfer repack denied (unpacked size limit) job_id={job_id} unpacked_bytes={unpacked_bytes} limit={limit}"
-            );
+            tracing::warn!(job_id, unpacked_bytes, limit, "transfer repack denied (unpacked size limit)");
             return (
                 false,
                 None,
@@ -520,7 +518,7 @@ async fn _run_repack_job_limited(
             .unwrap_or("input.bin");
         let dest_path = repack_abs.join(dest_name);
         if let Err(err) = fs::rename(download_abs, &dest_path).await {
-            eprintln!("transfer repack move failed job_id={job_id} error={err}");
+            tracing::warn!(job_id, error = %err, "transfer repack move failed");
             update_state_error_and_broadcast(&state, job_id, "repack_failed", "repack failed")
                 .await;
             return (
@@ -574,7 +572,7 @@ async fn _run_repack_job_limited(
     )
     .await
     {
-        eprintln!("transfer repack failed job_id={job_id} error={err}");
+        tracing::warn!(job_id, error = %err, "transfer repack failed");
         update_state_error_and_broadcast(&state, job_id, "repack_failed", "repack failed").await;
         return (
             false,
