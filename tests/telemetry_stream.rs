@@ -50,7 +50,8 @@ async fn server_span_stays_open_until_streamed_body_finishes() {
     let transfer = spans.iter().find(|s| s.name == "Send file to Nginx").unwrap();
     for (key, value) in [("ow.owner.type", "mod"), ("ow.owner.id", "7515"), ("ow.resource.id", "main"),
                          ("file.extension", "zip"), ("file.size", "5"), ("ow.transfer.bytes_sent", "5"),
-                         ("ow.transfer.percent_sent", "100"), ("ow.transfer.result", "complete")] {
+                         ("ow.transfer.percent_sent", "100"), ("ow.transfer.result", "complete"),
+                         ("ow.transfer.scope", "storage_to_nginx"), ("ow.transfer.measurement", "body_yielded_to_http_server")] {
         assert!(transfer.attributes.iter().any(|v| v.key.as_str() == key && v.value.to_string() == value), "missing {key}");
     }
     let server = spans.iter().find(|s| s.name.starts_with("GET ")).unwrap();

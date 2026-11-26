@@ -84,6 +84,10 @@ impl TracedBody {
     fn finish(&mut self) {
         if let Some(context) = self.transfer_context.take() {
             let span = context.span();
+            // These are bytes yielded to Hyper, not bytes acknowledged or read
+            // by the browser; nginx records the downstream leg separately.
+            span.set_attribute(KeyValue::new("ow.transfer.measurement", "body_yielded_to_http_server"));
+            span.set_attribute(KeyValue::new("ow.transfer.scope", "storage_to_nginx"));
             span.set_attribute(KeyValue::new("ow.transfer.bytes_sent", self.sent_bytes as i64));
             if let Some(expected) = self.expected_bytes {
                 if expected > 0 {
