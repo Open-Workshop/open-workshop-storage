@@ -15,6 +15,13 @@ static NEXT_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
 
 pub type RedisEventCallback = Arc<dyn Fn(Value) -> BoxFuture<'static, ()> + Send + Sync>;
 
+pub enum BlurhashCacheLookup {
+    Hit(Value),
+    Miss,
+    Error,
+    Disabled,
+}
+
 #[derive(Clone)]
 pub struct RedisBackend {
     client: Client,
@@ -267,7 +274,14 @@ impl RedisBackend {
     }
 
     pub async fn read_blurhash_cache(&self, cache_key: &str) -> Option<Value> {
-        let mut connection = self.connect().await?;
+        match self.read_blurhash_cache_checked(cache_key).await {
+            BlurhashCacheLookup::Hit(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub async fn read_blurhash_cache_checked(&self, cache_key: &str) -> BlurhashCacheLookup {
+        let Some(mut connection) = self.connect().await else { return BlurhashCacheLookup::Error; };
         let raw_value: redis::RedisResult<Option<String>> = redis::cmd("GET")
             .arg(self.blurhash_key(cache_key))
             .query_async(&mut connection)
@@ -276,21 +290,21 @@ impl RedisBackend {
             Ok(value) => value,
             Err(err) => {
                 tracing::debug!(cache_key, error = %err, "redis blurhash read failed");
-                return None;
+                return BlurhashCacheLookup::Error;
             }
         };
-        let raw_value = raw_value?;
+        let Some(raw_value) = raw_value else { return BlurhashCacheLookup::Miss; };
         let loaded = match serde_json::from_str::<Value>(&raw_value) {
             Ok(value) => value,
             Err(err) => {
                 tracing::warn!(cache_key, error = %err, "failed to decode redis blurhash cache entry");
-                return None;
+                return BlurhashCacheLookup::Error;
             }
         };
         if loaded.is_object() {
-            Some(loaded)
+            BlurhashCacheLookup::Hit(loaded)
         } else {
-            None
+            BlurhashCacheLookup::Error
         }
     }
 

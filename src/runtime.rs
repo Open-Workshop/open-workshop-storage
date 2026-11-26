@@ -22,7 +22,7 @@ use crate::config::AppConfig;
 use crate::fs_utils::safe_path;
 use crate::http_client::build_hyper_client;
 use crate::limits::ConcurrencyLimiter;
-use crate::redis_store::{RedisBackend, RedisEventCallback};
+use crate::redis_store::{BlurhashCacheLookup, RedisBackend, RedisEventCallback};
 use crate::state::{
     new_job_state, state_event_payload, unix_time_seconds, JobState, WsClientHandle,
 };
@@ -231,6 +231,13 @@ impl AppState {
     pub async fn read_blurhash_cache(&self, cache_key: &str) -> Option<Value> {
         let redis = self.redis_backend.as_ref()?;
         redis.read_blurhash_cache(cache_key).await
+    }
+
+    pub async fn read_blurhash_cache_checked(&self, cache_key: &str) -> BlurhashCacheLookup {
+        match &self.redis_backend {
+            Some(redis) => redis.read_blurhash_cache_checked(cache_key).await,
+            None => BlurhashCacheLookup::Disabled,
+        }
     }
 
     pub async fn write_blurhash_cache(&self, cache_key: &str, data: Value) {

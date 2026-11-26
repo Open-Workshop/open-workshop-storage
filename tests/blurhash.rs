@@ -105,7 +105,9 @@ async fn blurhash_reports_computation_then_local_hit() {
     let first = get_or_compute_with_stats(state.clone(), key.clone(), 4, 3, 64).await;
     let second = get_or_compute_with_stats(state, key, 4, 3, 64).await;
     assert_eq!(first.source, "computed");
+    assert_eq!(first.redis_status, "disabled");
     assert_eq!(second.source, "local");
+    assert_eq!(second.redis_status, "not_checked");
     assert_eq!(first.value, second.value);
     assert_eq!(second.redis_us, 0);
 }

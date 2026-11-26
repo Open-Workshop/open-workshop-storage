@@ -9,6 +9,7 @@ use crate::blurhash_cache::{
     build_blurhash_cache_key, decode_blurhash_cache_value, encode_blurhash_cache_value,
 };
 use crate::runtime::AppState;
+use crate::redis_store::BlurhashCacheLookup;
 
 pub async fn get_or_compute_blurhash_for_key(
     state: Arc<AppState>,
@@ -26,6 +27,7 @@ pub async fn get_or_compute_blurhash_for_key(
 pub struct BlurhashOutcome {
     pub value: Option<(String, u32, u32)>,
     pub source: &'static str,
+    pub redis_status: &'static str,
     pub local_us: u64,
     pub redis_us: u64,
     pub read_us: u64,
@@ -50,7 +52,7 @@ pub async fn get_or_compute_with_stats(
         max_dimension,
     );
 
-    let mut outcome = BlurhashOutcome { source: "failed", ..Default::default() };
+    let mut outcome = BlurhashOutcome { source: "failed", redis_status: "not_checked", ..Default::default() };
     let started = Instant::now();
     let local = state.read_local_blurhash_cache(&cache_key).await;
     outcome.local_us = started.elapsed().as_micros() as u64;
@@ -61,17 +63,22 @@ pub async fn get_or_compute_with_stats(
     }
 
     let started = Instant::now();
-    let redis = state.read_blurhash_cache(&cache_key).await;
+    let redis = state.read_blurhash_cache_checked(&cache_key).await;
     outcome.redis_us = started.elapsed().as_micros() as u64;
-    if let Some(cached) = redis {
-        if let Some(map) = cached.as_object() {
-            if let Some(result) = decode_blurhash_cache_value(map) {
+    match redis {
+        BlurhashCacheLookup::Hit(cached) => {
+            if let Some(result) = cached.as_object().and_then(decode_blurhash_cache_value) {
                 state.write_local_blurhash_cache(&cache_key, result.clone()).await;
+                outcome.redis_status = "hit";
                 outcome.source = "redis";
                 outcome.value = Some(result);
                 return outcome;
             }
+            outcome.redis_status = "error";
         }
+        BlurhashCacheLookup::Miss => outcome.redis_status = "miss",
+        BlurhashCacheLookup::Error => outcome.redis_status = "error",
+        BlurhashCacheLookup::Disabled => outcome.redis_status = "disabled",
     }
 
     let path = real_path.clone();
