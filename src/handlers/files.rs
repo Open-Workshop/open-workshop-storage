@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::body::Body;
 use axum::extract::{Extension, Multipart, Path as AxumPath, Query};
@@ -9,6 +10,8 @@ use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures_util::future::join_all;
+use opentelemetry::trace::{FutureExt, TraceContextExt, Tracer};
+use opentelemetry::{global, Context, KeyValue};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio_util::io::ReaderStream;
@@ -16,7 +19,7 @@ use tokio_util::io::ReaderStream;
 use crate::access_client;
 use crate::archive::{archive_entries_unpacked_bytes, probe_archive};
 use crate::auth;
-use crate::blurhash_service::get_or_compute_blurhash_for_key;
+use crate::blurhash_service::get_or_compute_with_stats;
 use crate::fs_utils::{
     build_download_filename, is_allowed_type, is_allowed_upload_type, normalize_file_kind,
     safe_path,
@@ -135,13 +138,22 @@ pub async fn blurhashes(
     Extension(state): Extension<Arc<AppState>>,
     Json(payload): Json<BlurhashBatchRequest>,
 ) -> impl IntoResponse {
+    let root = Context::current();
+    let requested = payload.paths.len();
+    let tracer = global::tracer("open-workshop-storage.blurhash");
+    let prepare_span = tracer.start_with_context("Blurhash: inspect files", &root);
+    let prepare_context = root.with_span(prepare_span);
+    let prepare_started = Instant::now();
     let prepared = join_all(
         payload
             .paths
             .into_iter()
             .map(|path| prepare_blurhash_item(state.clone(), path)),
     )
-    .await;
+    .with_context(prepare_context.clone()).await;
+    prepare_context.span().set_attribute(KeyValue::new("ow.blurhash.requested", requested as i64));
+    prepare_context.span().end();
+    let prepare_us = prepare_started.elapsed().as_micros() as i64;
     let mut seen = HashSet::new();
     let mut unique_keys = Vec::new();
     for (_, key) in &prepared {
@@ -152,16 +164,44 @@ pub async fn blurhashes(
         }
     }
 
+    let resolve_span = tracer.start_with_context("Blurhash: cache and generate", &root);
+    let resolve_context = root.with_span(resolve_span);
     let computed = join_all(
         unique_keys
             .iter()
             .cloned()
-            .map(|key| get_or_compute_blurhash_for_key(state.clone(), key, 4, 3, 64)),
+            .map(|key| get_or_compute_with_stats(state.clone(), key, 4, 3, 64)),
     )
-    .await;
+    .with_context(resolve_context.clone()).await;
+
+    let local_hits = computed.iter().filter(|r| r.source == "local").count();
+    let redis_hits = computed.iter().filter(|r| r.source == "redis").count();
+    let generated = computed.iter().filter(|r| r.source == "computed").count();
+    let failed = computed.iter().filter(|r| r.source == "failed").count();
+    let span = resolve_context.span();
+    for (name, value) in [
+        ("ow.blurhash.requested", requested as i64),
+        ("ow.blurhash.unique", unique_keys.len() as i64),
+        ("ow.blurhash.invalid", prepared.iter().filter(|(_, key)| key.is_none()).count() as i64),
+        ("ow.blurhash.local_hits", local_hits as i64),
+        ("ow.blurhash.redis_hits", redis_hits as i64),
+        ("ow.blurhash.generated", generated as i64),
+        ("ow.blurhash.failed", failed as i64),
+        ("ow.blurhash.prepare_us", prepare_us),
+        ("ow.blurhash.local_lookup_us_sum", computed.iter().map(|r| r.local_us).sum::<u64>() as i64),
+        ("ow.blurhash.redis_lookup_us_sum", computed.iter().map(|r| r.redis_us).sum::<u64>() as i64),
+        ("ow.blurhash.read_us_sum", computed.iter().map(|r| r.read_us).sum::<u64>() as i64),
+        ("ow.blurhash.read_us_max", computed.iter().map(|r| r.read_us).max().unwrap_or(0) as i64),
+        ("ow.blurhash.encode_us_sum", computed.iter().map(|r| r.encode_us).sum::<u64>() as i64),
+        ("ow.blurhash.encode_us_max", computed.iter().map(|r| r.encode_us).max().unwrap_or(0) as i64),
+        ("ow.blurhash.compute_us_max", computed.iter().map(|r| r.compute_us).max().unwrap_or(0) as i64),
+    ] {
+        span.set_attribute(KeyValue::new(name, value));
+    }
+    span.end();
 
     let blurhash_results: HashMap<_, _> =
-        unique_keys.into_iter().zip(computed.into_iter()).collect();
+        unique_keys.into_iter().zip(computed.into_iter().map(|outcome| outcome.value)).collect();
 
     let mut items = Vec::new();
     for (mut item, key) in prepared {

@@ -6,7 +6,7 @@ use std::time::UNIX_EPOCH;
 use axum::body::Body;
 use axum::http::{Method, StatusCode};
 use open_workshop_storage::blurhash_cache::build_blurhash_cache_key;
-use open_workshop_storage::blurhash_service::get_or_compute_blurhash_for_key;
+use open_workshop_storage::blurhash_service::{get_or_compute_blurhash_for_key, get_or_compute_with_stats};
 use open_workshop_storage::web::build_distributor_router;
 use serde_json::Value;
 
@@ -91,4 +91,21 @@ async fn blurhash_cache_survives_file_deletion() {
     assert_eq!(cached.1, 6);
     assert_eq!(cached.2, 4);
     assert!(state.read_blurhash_cache(&cache_key).await.is_none());
+}
+
+#[tokio::test]
+async fn blurhash_reports_computation_then_local_hit() {
+    let dir = temp_dir("blurhash-stats");
+    let state = test_state(dir.path());
+    let image_path = state.main_dir.join("resource/mods/456/logo.png");
+    write_png(&image_path, 6, 4, [30, 64, 120]);
+    let metadata = std::fs::metadata(&image_path).unwrap();
+    let mtime = metadata.modified().unwrap().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let key = (image_path, mtime, metadata.len());
+    let first = get_or_compute_with_stats(state.clone(), key.clone(), 4, 3, 64).await;
+    let second = get_or_compute_with_stats(state, key, 4, 3, 64).await;
+    assert_eq!(first.source, "computed");
+    assert_eq!(second.source, "local");
+    assert_eq!(first.value, second.value);
+    assert_eq!(second.redis_us, 0);
 }

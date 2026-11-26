@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use serde_json::Value;
 use tokio::task;
@@ -16,6 +17,29 @@ pub async fn get_or_compute_blurhash_for_key(
     components_y: u32,
     max_dimension: u32,
 ) -> Option<(String, u32, u32)> {
+    get_or_compute_with_stats(state, key, components_x, components_y, max_dimension)
+        .await
+        .value
+}
+
+#[derive(Default)]
+pub struct BlurhashOutcome {
+    pub value: Option<(String, u32, u32)>,
+    pub source: &'static str,
+    pub local_us: u64,
+    pub redis_us: u64,
+    pub read_us: u64,
+    pub encode_us: u64,
+    pub compute_us: u64,
+}
+
+pub async fn get_or_compute_with_stats(
+    state: Arc<AppState>,
+    key: (PathBuf, u128, u64),
+    components_x: u32,
+    components_y: u32,
+    max_dimension: u32,
+) -> BlurhashOutcome {
     let (real_path, mtime_ns, size) = key;
     let cache_key = build_blurhash_cache_key(
         real_path.to_string_lossy().as_ref(),
@@ -26,25 +50,47 @@ pub async fn get_or_compute_blurhash_for_key(
         max_dimension,
     );
 
-    if let Some(cached) = state.read_blurhash_cache(&cache_key).await {
+    let mut outcome = BlurhashOutcome { source: "failed", ..Default::default() };
+    let started = Instant::now();
+    let local = state.read_local_blurhash_cache(&cache_key).await;
+    outcome.local_us = started.elapsed().as_micros() as u64;
+    if let Some(cached) = local {
+        outcome.source = "local";
+        outcome.value = Some(cached);
+        return outcome;
+    }
+
+    let started = Instant::now();
+    let redis = state.read_blurhash_cache(&cache_key).await;
+    outcome.redis_us = started.elapsed().as_micros() as u64;
+    if let Some(cached) = redis {
         if let Some(map) = cached.as_object() {
             if let Some(result) = decode_blurhash_cache_value(map) {
-                return Some(result);
+                state.write_local_blurhash_cache(&cache_key, result.clone()).await;
+                outcome.source = "redis";
+                outcome.value = Some(result);
+                return outcome;
             }
         }
     }
 
-    if let Some(cached) = state.read_local_blurhash_cache(&cache_key).await {
-        return Some(cached);
-    }
-
     let path = real_path.clone();
-    let result = task::spawn_blocking(move || {
-        crate::images::image_file_to_blurhash(path, components_x, components_y, max_dimension).ok()
-    })
-    .await
-    .ok()
-    .flatten()?;
+    let started = Instant::now();
+    let computed = task::spawn_blocking(move || {
+        let read_started = Instant::now();
+        let bytes = std::fs::read(path);
+        let read_us = read_started.elapsed().as_micros() as u64;
+        let encode_started = Instant::now();
+        let result = bytes.ok().and_then(|data| {
+            crate::images::image_bytes_to_blurhash(&data, components_x, components_y, max_dimension).ok()
+        });
+        (result, read_us, encode_started.elapsed().as_micros() as u64)
+    }).await;
+    outcome.compute_us = started.elapsed().as_micros() as u64;
+    let Ok((result, read_us, encode_us)) = computed else { return outcome; };
+    outcome.read_us = read_us;
+    outcome.encode_us = encode_us;
+    let Some(result) = result else { return outcome; };
 
     let (blurhash, width, height) = result.clone();
     let _ = state
@@ -56,5 +102,7 @@ pub async fn get_or_compute_blurhash_for_key(
             Value::Object(encode_blurhash_cache_value(&blurhash, width, height)),
         )
         .await;
-    Some(result)
+    outcome.source = "computed";
+    outcome.value = Some(result);
+    outcome
 }

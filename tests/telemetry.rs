@@ -56,5 +56,5 @@ async fn request_logs_include_incoming_trace_and_current_span() {
     let text = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
     assert!(text.contains("trace_id=1234567890abcdef1234567890abcdef span_id="), "{text}");
     assert!(text.contains("handler event"), "{text}");
-    assert!(text.contains("HTTP request completed"), "{text}");
+    assert!(text.contains("HTTP response body finished"), "{text}");
 }
