@@ -1141,7 +1141,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
- "rand 0.8.8",
+ "rand 0.9.5",
  "redis",
  "regex",
  "serde",
