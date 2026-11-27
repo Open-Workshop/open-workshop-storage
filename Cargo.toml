@@ -6,7 +6,7 @@ license = "MPL-2.0"
 
 [dependencies]
 axum = { version = "0.7", features = ["ws", "multipart"] }
-bcrypt = "0.16"
+bcrypt = "0.19"
 base64 = "0.22"
 blurhash = "0.2.3"
 anyhow = "1"
