@@ -11,7 +11,7 @@ base64 = "0.22"
 blurhash = "0.2.3"
 anyhow = "1"
 futures-util = "0.3"
-hmac = "0.12"
+hmac = "0.13"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 lru = "0.19"
 bytes = "1"
