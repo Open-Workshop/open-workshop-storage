@@ -213,6 +213,7 @@ pub async fn blurhashes(
         ("ow.blurhash.encode_us_sum", computed.iter().map(|r| r.encode_us).sum::<u64>() as i64),
         ("ow.blurhash.encode_us_max", computed.iter().map(|r| r.encode_us).max().unwrap_or(0) as i64),
         ("ow.blurhash.compute_us_max", computed.iter().map(|r| r.compute_us).max().unwrap_or(0) as i64),
+        ("ow.blurhash.compute_queue_us_max", computed.iter().map(|r| r.compute_queue_us).max().unwrap_or(0) as i64),
     ] {
         span.set_attribute(KeyValue::new(name, value));
     }

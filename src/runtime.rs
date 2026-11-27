@@ -41,6 +41,7 @@ pub struct AppState {
     pub job_meta: Arc<Mutex<HashMap<String, Value>>>,
     blurhash_cache: Option<Arc<Mutex<LruCache<String, (String, u32, u32)>>>>,
     pub blurhash_metadata_limit: Arc<Semaphore>,
+    pub blurhash_compute_limit: Arc<Semaphore>,
     redis_backend: Option<Arc<RedisBackend>>,
     listener_state: Arc<Mutex<ListenerState>>,
     pub upload_limiter: ConcurrencyLimiter,
@@ -83,6 +84,7 @@ impl AppState {
             job_meta: Arc::new(Mutex::new(HashMap::new())),
             blurhash_cache,
             blurhash_metadata_limit: Arc::new(Semaphore::new(8)),
+            blurhash_compute_limit: Arc::new(Semaphore::new(4)),
             redis_backend,
             listener_state: Arc::new(Mutex::new(ListenerState {
                 users: 0,

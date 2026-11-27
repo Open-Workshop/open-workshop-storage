@@ -135,3 +135,26 @@ async fn blurhash_reports_computation_then_local_hit() {
     assert_eq!(first.value, second.value);
     assert_eq!(second.redis_us, 0);
 }
+
+#[tokio::test]
+async fn uncached_computation_waits_for_shared_capacity() {
+    let dir = temp_dir("blurhash-compute-limit");
+    let state = test_state(dir.path());
+    let image_path = state.main_dir.join("resource/mods/789/logo.png");
+    write_png(&image_path, 6, 4, [80, 90, 100]);
+    let metadata = std::fs::metadata(&image_path).unwrap();
+    let mtime = metadata.modified().unwrap().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let key = (image_path, mtime, metadata.len());
+    let permits = state.blurhash_compute_limit.clone().acquire_many_owned(4).await.unwrap();
+    let worker_state = state.clone();
+    let task = tokio::spawn(async move {
+        get_or_compute_with_stats(worker_state, key, 4, 3, 64).await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(!task.is_finished(), "calculation must wait while capacity is exhausted");
+    drop(permits);
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), task).await.unwrap().unwrap();
+    assert_eq!(outcome.source, "computed");
+    assert!(outcome.compute_queue_us >= 10_000);
+    assert_eq!(state.blurhash_compute_limit.available_permits(), 4);
+}

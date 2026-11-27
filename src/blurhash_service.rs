@@ -33,6 +33,7 @@ pub struct BlurhashOutcome {
     pub read_us: u64,
     pub encode_us: u64,
     pub compute_us: u64,
+    pub compute_queue_us: u64,
 }
 
 pub async fn get_or_compute_with_stats(
@@ -82,8 +83,16 @@ pub async fn get_or_compute_with_stats(
     }
 
     let path = real_path.clone();
+    let queued = Instant::now();
+    let Ok(permit) = state.blurhash_compute_limit.clone().acquire_owned().await else {
+        return outcome;
+    };
+    outcome.compute_queue_us = queued.elapsed().as_micros() as u64;
     let started = Instant::now();
     let computed = task::spawn_blocking(move || {
+        // Keep the permit until the blocking work actually ends, even when the
+        // HTTP request is cancelled while the task is running.
+        let _permit = permit;
         let read_started = Instant::now();
         let bytes = std::fs::read(path);
         let read_us = read_started.elapsed().as_micros() as u64;
