@@ -205,7 +205,7 @@ pub fn write_png(path: &Path, width: u32, height: u32, rgb: [u8; 3]) {
     let mut bytes = Vec::new();
     let encoder = WebPEncoder::new_lossless(&mut bytes);
     encoder
-        .encode(image.as_raw(), width, height, ColorType::Rgba8)
+        .encode(image.as_raw(), width, height, ColorType::Rgba8.into())
         .expect("encode webp");
     std::fs::write(path, bytes).expect("save image");
 }

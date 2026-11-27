@@ -1,49 +1,15 @@
 use std::path::Path;
-use std::io::Cursor;
 
 use blurhash::encode;
 use image::codecs::webp::WebPEncoder;
 use image::{ColorType, DynamicImage, GenericImageView, ImageError};
 
-// image 0.24's WebP decoder rejects or panics on some valid images. Decode
-// WebP with the maintained codec without changing the PNG and JPEG codecs.
-fn decode_webp(data: &[u8]) -> Option<DynamicImage> {
-    const MAX_OUTPUT_BYTES: usize = 512 * 1024 * 1024;
-    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(data)).ok()?;
-    decoder.set_memory_limit(MAX_OUTPUT_BYTES);
-    let (width, height) = decoder.dimensions();
-    let has_alpha = decoder.has_alpha();
-    let output_size = decoder.output_buffer_size()?;
-    if output_size > MAX_OUTPUT_BYTES {
-        return None;
-    }
-    let mut pixels = vec![0; output_size];
-    decoder.read_image(&mut pixels).ok()?;
-    if has_alpha {
-        image::RgbaImage::from_raw(width, height, pixels).map(DynamicImage::ImageRgba8)
-    } else {
-        image::RgbImage::from_raw(width, height, pixels).map(DynamicImage::ImageRgb8)
-    }
-}
-
-fn decode_image(data: &[u8]) -> Result<DynamicImage, ImageError> {
-    if matches!(image::guess_format(data), Ok(image::ImageFormat::WebP)) {
-        return decode_webp(data).ok_or_else(|| {
-            ImageError::IoError(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "WebP decoding failed or image exceeds the memory limit",
-            ))
-        });
-    }
-    image::load_from_memory(data)
-}
-
 pub fn image_bytes_to_webp(data: &[u8], _quality: u8) -> Result<Vec<u8>, ImageError> {
-    let img = decode_image(data)?;
+    let img = image::load_from_memory(data)?;
     let rgba = img.to_rgba8();
     let mut out = Vec::new();
     let encoder = WebPEncoder::new_lossless(&mut out);
-    encoder.encode(rgba.as_raw(), rgba.width(), rgba.height(), ColorType::Rgba8)?;
+    encoder.encode(rgba.as_raw(), rgba.width(), rgba.height(), ColorType::Rgba8.into())?;
     Ok(out)
 }
 
@@ -64,7 +30,7 @@ pub fn image_bytes_to_blurhash(
     components_y: u32,
     max_dimension: u32,
 ) -> Result<(String, u32, u32), ImageError> {
-    let img = decode_image(data)?;
+    let img = image::load_from_memory(data)?;
     let (width, height) = img.dimensions();
     let mut rgba = img.to_rgba8();
     if width.max(height) > max_dimension {
@@ -123,8 +89,8 @@ mod tests {
     fn webp_decoder_preserves_transparency() {
         let pixels = [20, 40, 60, 0, 120, 140, 160, 128, 220, 230, 240, 255, 1, 2, 3, 64];
         let mut bytes = Vec::new();
-        WebPEncoder::new_lossless(&mut bytes).encode(&pixels, 2, 2, ColorType::Rgba8).unwrap();
-        let decoded = decode_webp(&bytes).unwrap().to_rgba8();
+        WebPEncoder::new_lossless(&mut bytes).encode(&pixels, 2, 2, ColorType::Rgba8.into()).unwrap();
+        let decoded = image::load_from_memory(&bytes).unwrap().to_rgba8();
         assert_eq!(decoded.dimensions(), (2, 2));
         // The RGB channels of a fully transparent pixel may be normalized.
         assert_eq!(decoded.get_pixel(0, 0).0[3], 0);
@@ -134,7 +100,7 @@ mod tests {
 
     #[test]
     fn webp_decoder_rejects_invalid_webp() {
-        assert!(decode_webp(b"RIFF\x00\x00\x00\x00WEBP").is_none());
+        assert!(image::load_from_memory(b"RIFF\x00\x00\x00\x00WEBP").is_err());
     }
 
     #[test]
