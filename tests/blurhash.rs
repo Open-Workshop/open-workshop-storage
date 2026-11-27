@@ -51,6 +51,30 @@ async fn blurhash_endpoint_generates_hash_for_download_url() {
 }
 
 #[tokio::test]
+async fn blurhash_batch_preserves_order_duplicates_and_missing_paths() {
+    let dir = temp_dir("blurhash-batch-order");
+    let state = test_state(dir.path());
+    write_png(&state.main_dir.join("resource/mods/123/logo.png"), 6, 4, [255, 64, 0]);
+    let app = build_distributor_router(state);
+    let image = "/download/resource/mods/123/logo.png";
+    let missing = "/download/resource/mods/123/missing.png";
+    let invalid = "/download/resource/../../outside.png";
+    let paths = vec![image, missing, image, invalid];
+    let response = call_with_headers(
+        &app, Method::POST, "/blurhashes", &[("content-type", "application/json")],
+        Body::from(serde_json::json!({"paths": paths}).to_string()),
+    ).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: Value = serde_json::from_str(&response_text(response).await).unwrap();
+    let items = payload["items"].as_array().unwrap();
+    assert_eq!(items.iter().map(|item| item["path"].as_str().unwrap()).collect::<Vec<_>>(), paths);
+    assert!(items[0]["blurhash"].is_string());
+    assert_eq!(items[0]["blurhash"], items[2]["blurhash"]);
+    assert!(items[1]["blurhash"].is_null());
+    assert!(items[3]["blurhash"].is_null());
+}
+
+#[tokio::test]
 async fn blurhash_cache_survives_file_deletion() {
     let dir = temp_dir("blurhash-cache");
     let state = test_state(dir.path());

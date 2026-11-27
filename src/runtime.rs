@@ -14,7 +14,7 @@ use lru::LruCache;
 use opentelemetry::{global, Context, KeyValue};
 use opentelemetry::trace::{FutureExt as OtelFutureExt, SpanKind, Status, TraceContextExt, Tracer};
 use serde_json::{Map, Value};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinHandle;
 
 use crate::auth;
@@ -40,6 +40,7 @@ pub struct AppState {
     pub job_state: Arc<Mutex<HashMap<String, JobState>>>,
     pub job_meta: Arc<Mutex<HashMap<String, Value>>>,
     blurhash_cache: Option<Arc<Mutex<LruCache<String, (String, u32, u32)>>>>,
+    pub blurhash_metadata_limit: Arc<Semaphore>,
     redis_backend: Option<Arc<RedisBackend>>,
     listener_state: Arc<Mutex<ListenerState>>,
     pub upload_limiter: ConcurrencyLimiter,
@@ -81,6 +82,7 @@ impl AppState {
             job_state: Arc::new(Mutex::new(HashMap::new())),
             job_meta: Arc::new(Mutex::new(HashMap::new())),
             blurhash_cache,
+            blurhash_metadata_limit: Arc::new(Semaphore::new(8)),
             redis_backend,
             listener_state: Arc::new(Mutex::new(ListenerState {
                 users: 0,

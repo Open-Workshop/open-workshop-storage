@@ -104,6 +104,21 @@ async fn prepare_blurhash_item(
         width: None,
         height: None,
     };
+    let fallback = item.clone();
+    let Ok(permit) = state.blurhash_metadata_limit.clone().acquire_owned().await else {
+        return (item, None);
+    };
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        prepare_blurhash_item_sync(&state, raw_path, item)
+    }).await.unwrap_or((fallback, None))
+}
+
+fn prepare_blurhash_item_sync(
+    state: &AppState,
+    raw_path: String,
+    item: BlurhashItemRead,
+) -> (BlurhashItemRead, Option<(PathBuf, u128, u64)>) {
     let Some((storage_type, storage_path)) = normalize_blurhash_target(&raw_path) else {
         return (item, None);
     };
@@ -115,12 +130,12 @@ async fn prepare_blurhash_item(
     let Ok(real_path) = safe_path(&base_dir, &storage_path) else {
         return (item, None);
     };
-    if !real_path.is_file() {
-        return (item, None);
-    }
     let Ok(stat_result) = std::fs::metadata(&real_path) else {
         return (item, None);
     };
+    if !stat_result.is_file() {
+        return (item, None);
+    }
     let key = (
         real_path,
         stat_result
