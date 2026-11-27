@@ -13,7 +13,7 @@ anyhow = "1"
 futures-util = "0.3"
 hmac = "0.12"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
-lru = "0.12"
+lru = "0.19"
 bytes = "1"
 http-body-util = "0.1"
 http-body = "1"
@@ -32,12 +32,12 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
-opentelemetry = { version = "0.31", features = ["trace"] }
-opentelemetry_sdk = { version = "0.31", features = ["trace"] }
-opentelemetry-otlp = { version = "0.31", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client"] }
+opentelemetry = { version = "0.33", features = ["trace"] }
+opentelemetry_sdk = { version = "0.33", features = ["trace"] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client"] }
 serde_urlencoded = "0.7"
-utoipa = { version = "5.5.0", features = ["axum_extras", "openapi_extensions"] }
-utoipa-swagger-ui = "9.0.2"
+utoipa = { version = "6.0.0", features = ["axum_extras", "openapi_extensions"] }
+utoipa-swagger-ui = "10.0.2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
