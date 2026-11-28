@@ -24,7 +24,7 @@ async fn server_span_stays_open_until_streamed_body_finishes() {
     global::set_text_map_propagator(TraceContextPropagator::new());
     let (sender, receiver) = mpsc::channel::<Bytes>(4);
     let receiver = Arc::new(tokio::sync::Mutex::new(Some(receiver)));
-    let app = Router::new().route("/download/:storage_type/*path", get(move || {
+    let app = Router::new().route("/download/{storage_type}/{*path}", get(move || {
         let receiver = receiver.clone();
         async move {
             let receiver = receiver.lock().await.take().unwrap();
@@ -60,7 +60,7 @@ async fn server_span_stays_open_until_streamed_body_finishes() {
 
     let (sender, receiver) = mpsc::channel::<Bytes>(4);
     let receiver = Arc::new(tokio::sync::Mutex::new(Some(receiver)));
-    let app = Router::new().route("/download/:storage_type/*path", get(move || {
+    let app = Router::new().route("/download/{storage_type}/{*path}", get(move || {
         let receiver = receiver.clone();
         async move {
             let rx = receiver.lock().await.take().unwrap();

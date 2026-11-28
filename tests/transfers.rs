@@ -50,7 +50,7 @@ async fn spawn_access_service() -> (common::SpawnedServer, Arc<Mutex<AccessCaptu
     let capture = Arc::new(Mutex::new(AccessCapture::default()));
     let app = Router::new()
         .route(
-            "/mod/:mod_id",
+            "/mod/{mod_id}",
             axum::routing::post(
                 |axum::extract::Path(mod_id): axum::extract::Path<u64>,
                  headers: axum::http::HeaderMap,

@@ -71,7 +71,7 @@ pub fn build_distributor_router(state: Arc<AppState>) -> Router {
         .merge(openapi_docs::distributor_docs_router())
         .route("/blurhashes", post(files::blurhashes))
         .route(
-            "/download/:storage_type/*path",
+            "/download/{storage_type}/{*path}",
             get(files::download).head(files::download),
         )
         .layer(axum::extract::Extension(state))
@@ -89,7 +89,7 @@ pub fn build_loader_router(state: Arc<AppState>) -> Router {
             get(transfers::transfer_start_get).post(transfers::transfer_start_post),
         )
         .route("/transfer/upload", post(transfers::transfer_upload))
-        .route("/transfer/ws/:job_id", get(transfers::transfer_ws))
+        .route("/transfer/ws/{job_id}", get(transfers::transfer_ws))
         .route("/transfer/repack", post(transfers::transfer_repack))
         .route("/transfer/move", post(transfers::transfer_move))
         .layer(axum::extract::Extension(state))

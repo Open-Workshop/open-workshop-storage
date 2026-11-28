@@ -42,3 +42,20 @@ fn transfer_jwt_round_trip_works() {
     );
     assert_eq!(decoded.get("aud").and_then(Value::as_str), Some("storage"));
 }
+
+#[test]
+fn existing_bcrypt_hashes_remain_valid_after_upgrade() {
+    let hash = "$2b$04$abcdefghijklmnopqrstuu6idm4fKzWcovIJIpYNHcl9xI4Dwfk92";
+    assert!(bcrypt::verify("upload-token", hash).unwrap());
+    assert!(!bcrypt::verify("wrong-token", hash).unwrap());
+}
+
+#[test]
+fn previously_issued_hs256_tokens_remain_valid() {
+    let dir = temp_dir("legacy-jwt");
+    let config = test_config(dir.path());
+    let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJzdG9yYWdlIiwiZXhwIjo0MTAyNDQ0ODAwLCJqb2JfaWQiOiJmaXh0dXJlMTIzIn0.Vn56WgHmNh3EELlQFLngP500ehhWG25FsbKzgIvd5MQ";
+    let claims = decode_transfer_jwt(&config, token, "storage").expect("legacy token");
+    assert_eq!(claims.get("job_id").and_then(Value::as_str), Some("fixture123"));
+    assert!(decode_transfer_jwt(&config, token, "other").is_none());
+}

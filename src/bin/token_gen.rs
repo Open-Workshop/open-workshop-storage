@@ -1,15 +1,10 @@
 use bcrypt::hash;
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
+use rand::distr::{Alphanumeric, SampleString};
 
 const TOKENS: [&str; 3] = ["delete_file", "upload_file", "storage_manage_token"];
 
 fn generate_token(length: usize) -> String {
-    thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(length)
-        .map(char::from)
-        .collect()
+    Alphanumeric.sample_string(&mut rand::rng(), length)
 }
 
 fn hash_token(token: &str) -> String {
@@ -34,4 +29,18 @@ fn main() {
     println!(
         "Keep the plain tokens safe and store only the hashes in your deployment environment."
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generate_token;
+
+    #[test]
+    fn generates_expected_length_alphanumeric_tokens() {
+        let a = generate_token(32);
+        let b = generate_token(32);
+        assert_eq!(a.len(), 32);
+        assert!(a.bytes().all(|c| c.is_ascii_alphanumeric()));
+        assert_ne!(a, b);
+    }
 }

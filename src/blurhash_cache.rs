@@ -19,7 +19,12 @@ pub fn build_blurhash_cache_key(
     });
     let raw = serde_json::to_string(&payload).unwrap_or_default();
     let digest = Sha256::digest(raw.as_bytes());
-    format!("{digest:x}")
+    use std::fmt::Write as _;
+    let mut result = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut result, "{byte:02x}").expect("writing to a string cannot fail");
+    }
+    result
 }
 
 pub fn encode_blurhash_cache_value(blurhash: &str, width: u32, height: u32) -> Map<String, Value> {

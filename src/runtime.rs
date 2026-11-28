@@ -274,7 +274,7 @@ impl AppState {
         for client in clients {
             if client
                 .sender
-                .send(Message::Text(message.to_string()))
+                .send(Message::Text(message.to_string().into()))
                 .is_err()
             {
                 dead_ids.push(client.id);

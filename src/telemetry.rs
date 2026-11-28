@@ -219,7 +219,7 @@ pub async fn trace_request(req: Request<Body>, next: Next) -> Response {
     let expected_bytes = response.headers().get(axum::http::header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok()).and_then(|value| value.parse::<u64>().ok());
     let content_type = response.headers().get(axum::http::header::CONTENT_TYPE).and_then(|value| value.to_str().ok());
-    let transfer_context = if method == "GET" && route == "/download/:storage_type/*path" && response.status().is_success() {
+    let transfer_context = if method == "GET" && route == "/download/{storage_type}/{*path}" && response.status().is_success() {
         let span = tracer.span_builder("Send file to Nginx")
             .with_kind(SpanKind::Internal)
             .with_attributes(file_attributes(&path, expected_bytes, content_type))

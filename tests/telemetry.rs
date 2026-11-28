@@ -44,7 +44,7 @@ async fn request_logs_include_incoming_trace_and_current_span() {
     let provider = SdkTracerProvider::builder().build();
     global::set_tracer_provider(provider);
     global::set_text_map_propagator(TraceContextPropagator::new());
-    let router = Router::new().route("/test/:id", get(|| async {
+    let router = Router::new().route("/test/{id}", get(|| async {
         tracing::info!("handler event");
         "ok"
     })).layer(middleware::from_fn(telemetry::trace_request));
