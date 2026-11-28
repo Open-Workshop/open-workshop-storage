@@ -17,6 +17,7 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinHandle;
 
 use crate::auth;
+use crate::blurhash_popularity::PopularityReporter;
 use crate::config::AppConfig;
 use crate::fs_utils::safe_path;
 use crate::http_client::build_hyper_client;
@@ -43,6 +44,7 @@ pub struct AppState {
     pub blurhash_compute_limit: Arc<Semaphore>,
     redis_backend: Option<Arc<RedisBackend>>,
     blurhash_redis_backend: Option<Arc<RedisBackend>>,
+    blurhash_popularity: Option<PopularityReporter>,
     listener_state: Arc<Mutex<ListenerState>>,
     pub upload_limiter: ConcurrencyLimiter,
     pub download_limiter: ConcurrencyLimiter,
@@ -84,6 +86,12 @@ impl AppState {
             Some(url) if !url.trim().is_empty() => Some(Arc::new(RedisBackend::new(url, config.redis_prefix.clone())?)),
             _ => redis_backend.clone(),
         };
+        let blurhash_popularity = match (&blurhash_redis_backend, &blurhash_cache) {
+            (Some(redis), Some(_)) if tokio::runtime::Handle::try_current().is_ok() => {
+                Some(PopularityReporter::start(redis.clone(), config.blurhash_cache_ttl_seconds))
+            }
+            _ => None,
+        };
 
         Ok(Arc::new(Self {
             main_dir,
@@ -96,6 +104,7 @@ impl AppState {
             blurhash_compute_limit: Arc::new(Semaphore::new(4)),
             redis_backend,
             blurhash_redis_backend,
+            blurhash_popularity,
             listener_state: Arc::new(Mutex::new(ListenerState {
                 users: 0,
                 task: None,
@@ -230,7 +239,20 @@ impl AppState {
         let Some(cache) = &self.blurhash_cache else {
             return None;
         };
-        cache.get(cache_key).await
+        let result = cache.get(cache_key).await;
+        if let (Some(reporter), Some(value)) = (&self.blurhash_popularity, &result) {
+            reporter.record(cache_key, value);
+        }
+        result
+    }
+
+    pub fn take_blurhash_popularity_stats(&self) -> [u64; 6] {
+        use std::sync::atomic::Ordering;
+        let Some(reporter) = &self.blurhash_popularity else { return [0; 6]; };
+        let s = &reporter.stats;
+        [s.queued.swap(0, Ordering::Relaxed), s.dropped.swap(0, Ordering::Relaxed),
+         s.forwarded.swap(0, Ordering::Relaxed), s.restored.swap(0, Ordering::Relaxed),
+         s.renewed.swap(0, Ordering::Relaxed), s.failed.swap(0, Ordering::Relaxed)]
     }
 
     pub async fn write_local_blurhash_cache(&self, cache_key: &str, data: (String, u32, u32)) {

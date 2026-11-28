@@ -22,6 +22,18 @@ pub enum BlurhashCacheLookup {
     Disabled,
 }
 
+pub struct BlurhashPopularityItem {
+    pub key: String,
+    pub value: (String, u32, u32),
+    pub hits: u32,
+}
+
+pub struct BlurhashPopularityResult {
+    pub forwarded: u64,
+    pub restored: u64,
+    pub renewed: u64,
+}
+
 #[derive(Clone)]
 pub struct RedisBackend {
     client: Client,
@@ -278,6 +290,50 @@ impl RedisBackend {
             BlurhashCacheLookup::Hit(value) => Some(value),
             _ => None,
         }
+    }
+
+    /// Refresh Redis LFU for locally served values in bounded background batches.
+    pub async fn update_blurhash_popularity(
+        &self,
+        items: &[BlurhashPopularityItem],
+        ttl: u64,
+    ) -> redis::RedisResult<BlurhashPopularityResult> {
+        let Some(mut connection) = self.connect().await else {
+            return Err(redis::RedisError::from((redis::ErrorKind::Io, "redis connection failed")));
+        };
+        let script = r#"
+            local ttl = tonumber(ARGV[1])
+            local restored, renewed, forwarded = 0, 0, 0
+            for i, key in ipairs(KEYS) do
+                local hits = tonumber(ARGV[2 * i])
+                local value = ARGV[2 * i + 1]
+                if redis.call('EXISTS', key) == 0 then
+                    if ttl > 0 then redis.call('SET', key, value, 'EX', ttl)
+                    else redis.call('SET', key, value) end
+                    restored = restored + 1
+                elseif ttl > 0 then
+                    local remaining = redis.call('TTL', key)
+                    if remaining >= 0 and remaining < ttl / 2 then
+                        redis.call('EXPIRE', key, ttl)
+                        renewed = renewed + 1
+                    end
+                end
+                for _ = 1, hits do redis.call('TOUCH', key) end
+                forwarded = forwarded + hits
+            end
+            return {forwarded, restored, renewed}
+        "#;
+        let mut command = redis::cmd("EVAL");
+        command.arg(script).arg(items.len());
+        for item in items { command.arg(self.blurhash_key(&item.key)); }
+        command.arg(ttl);
+        for item in items {
+            let (hash, width, height) = &item.value;
+            let value = crate::blurhash_cache::encode_blurhash_cache_value(hash, *width, *height);
+            command.arg(item.hits).arg(Value::Object(value).to_string());
+        }
+        let values: (u64, u64, u64) = command.query_async(&mut connection).await?;
+        Ok(BlurhashPopularityResult { forwarded: values.0, restored: values.1, renewed: values.2 })
     }
 
     pub async fn read_blurhash_cache_checked(&self, cache_key: &str) -> BlurhashCacheLookup {

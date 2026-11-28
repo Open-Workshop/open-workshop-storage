@@ -31,6 +31,13 @@ anymore.
 | `BLURHASH_CACHE_MAX_BYTES` | no | Estimated local cache memory budget, default `5242880` (5 MiB); `0` disables the cache. Conservative entry weights include an allowance for cache metadata. Moka maintains capacity asynchronously; this is not a hard RSS limit. |
 | `BLURHASH_CACHE_TTL_SECONDS` | no | Redis TTL for shared BlurHash cache entries when `REDIS_URL` is configured; default `604800`, `0` disables expiry |
 
+Local BlurHash hits are reported to Redis in bounded background batches every
+10 seconds. Redis updates LFU frequency, restores a missing value, and renews
+its TTL when less than half remains. Reporting is best-effort: full queues,
+per-key bursts beyond 16 hits per batch, and Redis failures drop notifications
+instead of delaying requests. With no Redis configured the local cache works
+independently. Request spans contain aggregated reporting counters.
+
 ### Service Ownership
 
 - Distributor service: `MAIN_DIR`, `ACCESS_SERVICE_URL`, `ACCESS_SERVICE_TIMEOUT_SECONDS`, `BLURHASH_CACHE_SIZE`, `BLURHASH_CACHE_TTL_SECONDS`, `REDIS_URL`, `REDIS_PREFIX` when using shared BlurHash cache. Keep `BLURHASH_CACHE_SIZE` conservative unless you have a small number of hot images or plenty of per-worker memory headroom.

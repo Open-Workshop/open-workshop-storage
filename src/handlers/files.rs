@@ -194,6 +194,7 @@ pub async fn blurhashes(
     let generated = computed.iter().filter(|r| r.source == "computed").count();
     let failed = computed.iter().filter(|r| r.source == "failed").count();
     let span = resolve_context.span();
+    let popularity = state.take_blurhash_popularity_stats();
     span.set_attribute(KeyValue::new(
         "ow.blurhash.cache_policy",
         if state.config.blurhash_cache_size == 0 || state.config.blurhash_cache_max_bytes == 0 { "disabled" } else { "moka_tinylfu" },
@@ -213,6 +214,12 @@ pub async fn blurhashes(
         ("ow.blurhash.local_capacity", state.config.blurhash_cache_size as i64),
         ("ow.blurhash.local_weight_bytes_estimate", state.local_blurhash_cache_weight_bytes() as i64),
         ("ow.blurhash.local_budget_bytes", state.config.blurhash_cache_max_bytes as i64),
+        ("ow.blurhash.popularity_queued", popularity[0] as i64),
+        ("ow.blurhash.popularity_dropped", popularity[1] as i64),
+        ("ow.blurhash.popularity_forwarded", popularity[2] as i64),
+        ("ow.blurhash.popularity_restored", popularity[3] as i64),
+        ("ow.blurhash.popularity_renewed", popularity[4] as i64),
+        ("ow.blurhash.popularity_failed", popularity[5] as i64),
         ("ow.blurhash.prepare_us", prepare_us),
         ("ow.blurhash.local_lookup_us_sum", computed.iter().map(|r| r.local_us).sum::<u64>() as i64),
         ("ow.blurhash.redis_lookup_us_sum", computed.iter().map(|r| r.redis_us).sum::<u64>() as i64),

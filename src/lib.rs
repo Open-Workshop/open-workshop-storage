@@ -2,6 +2,7 @@ pub mod access_client;
 pub mod archive;
 pub mod auth;
 pub mod blurhash_cache;
+pub mod blurhash_popularity;
 pub mod blurhash_service;
 pub mod config;
 pub mod fs_utils;
