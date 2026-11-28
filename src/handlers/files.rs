@@ -196,7 +196,7 @@ pub async fn blurhashes(
     let span = resolve_context.span();
     span.set_attribute(KeyValue::new(
         "ow.blurhash.cache_policy",
-        if state.config.blurhash_cache_size == 0 { "disabled" } else { "moka_tinylfu" },
+        if state.config.blurhash_cache_size == 0 || state.config.blurhash_cache_max_bytes == 0 { "disabled" } else { "moka_tinylfu" },
     ));
     for (name, value) in [
         ("ow.blurhash.requested", requested as i64),
@@ -211,6 +211,8 @@ pub async fn blurhashes(
         ("ow.blurhash.failed", failed as i64),
         ("ow.blurhash.local_entries_estimate", state.local_blurhash_cache_entries() as i64),
         ("ow.blurhash.local_capacity", state.config.blurhash_cache_size as i64),
+        ("ow.blurhash.local_weight_bytes_estimate", state.local_blurhash_cache_weight_bytes() as i64),
+        ("ow.blurhash.local_budget_bytes", state.config.blurhash_cache_max_bytes as i64),
         ("ow.blurhash.prepare_us", prepare_us),
         ("ow.blurhash.local_lookup_us_sum", computed.iter().map(|r| r.local_us).sum::<u64>() as i64),
         ("ow.blurhash.redis_lookup_us_sum", computed.iter().map(|r| r.redis_us).sum::<u64>() as i64),

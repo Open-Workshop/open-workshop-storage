@@ -42,6 +42,7 @@ pub struct AppState {
     pub blurhash_metadata_limit: Arc<Semaphore>,
     pub blurhash_compute_limit: Arc<Semaphore>,
     redis_backend: Option<Arc<RedisBackend>>,
+    blurhash_redis_backend: Option<Arc<RedisBackend>>,
     listener_state: Arc<Mutex<ListenerState>>,
     pub upload_limiter: ConcurrencyLimiter,
     pub download_limiter: ConcurrencyLimiter,
@@ -59,10 +60,17 @@ impl AppState {
         std::fs::create_dir_all(main_dir.join("avatar"))?;
         std::fs::create_dir_all(&temp_dir)?;
 
-        let blurhash_cache = if config.blurhash_cache_size == 0 {
+        let blurhash_cache = if config.blurhash_cache_size == 0 || config.blurhash_cache_max_bytes == 0 {
             None
         } else {
-            Some(Cache::new(config.blurhash_cache_size as u64))
+            // Account conservatively for the key, value and Moka's indexing metadata.
+            // The minimum weight also preserves the existing entry-count setting.
+            let bytes = config.blurhash_cache_max_bytes as u64;
+            let min_weight = bytes.div_ceil(config.blurhash_cache_size as u64).max(512);
+            Some(Cache::builder().max_capacity(bytes).weigher(move |key: &String, value: &(String, u32, u32)| {
+                let estimate = key.capacity().saturating_add(value.0.capacity()).saturating_add(512) as u64;
+                estimate.max(min_weight).min(u32::MAX as u64) as u32
+            }).build())
         };
 
         let redis_backend = match config.redis_url.as_deref() {
@@ -71,6 +79,10 @@ impl AppState {
                 config.redis_prefix.clone(),
             )?)),
             _ => None,
+        };
+        let blurhash_redis_backend = match config.blurhash_redis_url.as_deref() {
+            Some(url) if !url.trim().is_empty() => Some(Arc::new(RedisBackend::new(url, config.redis_prefix.clone())?)),
+            _ => redis_backend.clone(),
         };
 
         Ok(Arc::new(Self {
@@ -83,6 +95,7 @@ impl AppState {
             blurhash_metadata_limit: Arc::new(Semaphore::new(8)),
             blurhash_compute_limit: Arc::new(Semaphore::new(4)),
             redis_backend,
+            blurhash_redis_backend,
             listener_state: Arc::new(Mutex::new(ListenerState {
                 users: 0,
                 task: None,
@@ -232,20 +245,24 @@ impl AppState {
         self.blurhash_cache.as_ref().map_or(0, Cache::entry_count)
     }
 
+    pub fn local_blurhash_cache_weight_bytes(&self) -> u64 {
+        self.blurhash_cache.as_ref().map_or(0, Cache::weighted_size)
+    }
+
     pub async fn read_blurhash_cache(&self, cache_key: &str) -> Option<Value> {
-        let redis = self.redis_backend.as_ref()?;
+        let redis = self.blurhash_redis_backend.as_ref()?;
         redis.read_blurhash_cache(cache_key).await
     }
 
     pub async fn read_blurhash_cache_checked(&self, cache_key: &str) -> BlurhashCacheLookup {
-        match &self.redis_backend {
+        match &self.blurhash_redis_backend {
             Some(redis) => redis.read_blurhash_cache_checked(cache_key).await,
             None => BlurhashCacheLookup::Disabled,
         }
     }
 
     pub async fn write_blurhash_cache(&self, cache_key: &str, data: Value) {
-        let Some(redis) = &self.redis_backend else {
+        let Some(redis) = &self.blurhash_redis_backend else {
             return;
         };
         redis

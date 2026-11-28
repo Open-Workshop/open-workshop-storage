@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub manager_transfer_callback_url: Option<String>,
     pub transfer_jwt_secret: Option<String>,
     pub redis_url: Option<String>,
+    pub blurhash_redis_url: Option<String>,
     pub redis_prefix: String,
     pub transfer_callback_ttl_seconds: u64,
     pub transfer_max_bytes: Option<u64>,
@@ -23,6 +24,7 @@ pub struct AppConfig {
     pub seven_zip_idle_timeout_seconds: Option<f64>,
     pub access_service_timeout_seconds: u64,
     pub blurhash_cache_size: usize,
+    pub blurhash_cache_max_bytes: usize,
     pub blurhash_cache_ttl_seconds: u64,
     pub cleanup_interval_seconds: u64,
     pub job_ttl_seconds: u64,
@@ -44,6 +46,7 @@ impl AppConfig {
             read_env_optional_string("MANAGER_TRANSFER_CALLBACK_URL");
         let transfer_jwt_secret = read_env_optional_string("TRANSFER_JWT_SECRET");
         let redis_url = read_env_optional_string("REDIS_URL");
+        let blurhash_redis_url = read_env_optional_string("BLURHASH_REDIS_URL");
         let redis_prefix = read_env_string("REDIS_PREFIX", "open-workshop-storage");
         let transfer_callback_ttl_seconds = read_env_u64("TRANSFER_CALLBACK_TTL_SECONDS", 600);
         let transfer_max_bytes = read_env_optional_u64_nonzero("TRANSFER_MAX_BYTES");
@@ -63,6 +66,7 @@ impl AppConfig {
             read_env_optional_f64_positive("SEVEN_ZIP_IDLE_TIMEOUT_SECONDS");
         let access_service_timeout_seconds = read_env_u64("ACCESS_SERVICE_TIMEOUT_SECONDS", 30);
         let blurhash_cache_size = read_env_usize("BLURHASH_CACHE_SIZE", 4096);
+        let blurhash_cache_max_bytes = read_env_usize("BLURHASH_CACHE_MAX_BYTES", 5 * 1024 * 1024);
         let blurhash_cache_ttl_seconds = read_env_u64("BLURHASH_CACHE_TTL_SECONDS", 604800);
         let cleanup_interval_seconds = read_env_u64("CLEANUP_INTERVAL_SECONDS", 60);
         let job_ttl_seconds = read_env_u64("JOB_TTL_SECONDS", 10800);
@@ -78,6 +82,7 @@ impl AppConfig {
             manager_transfer_callback_url,
             transfer_jwt_secret,
             redis_url,
+            blurhash_redis_url,
             redis_prefix,
             transfer_callback_ttl_seconds,
             transfer_max_bytes,
@@ -92,6 +97,7 @@ impl AppConfig {
             seven_zip_idle_timeout_seconds,
             access_service_timeout_seconds,
             blurhash_cache_size,
+            blurhash_cache_max_bytes,
             blurhash_cache_ttl_seconds,
             cleanup_interval_seconds,
             job_ttl_seconds,

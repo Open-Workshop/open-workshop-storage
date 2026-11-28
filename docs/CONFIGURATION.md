@@ -13,6 +13,7 @@ anymore.
 | `MANAGER_TRANSFER_CALLBACK_URL` | no | Explicit callback endpoint; if empty, fallback is `<MANAGER_URL>/internal/storage/transfer-completions` |
 | `TRANSFER_JWT_SECRET` | yes | Shared secret for transfer JWT validation and Manager callback signing |
 | `REDIS_URL` | no | Redis connection URL used for shared job state, metadata, and websocket fan-out; leave empty for local in-memory fallback |
+| `BLURHASH_REDIS_URL` | no | Optional separate Redis for BlurHash values; defaults to `REDIS_URL` if omitted. |
 | `REDIS_PREFIX` | no | Key prefix used for Redis job keys and pub/sub channels; default `open-workshop-storage` |
 | `TRANSFER_CALLBACK_TTL_SECONDS` | no | Lifetime of outgoing callback JWTs; default `600` |
 | `TRANSFER_MAX_BYTES` | no | Global maximum transfer size; `0` disables the limit |
@@ -26,7 +27,8 @@ anymore.
 | `SEVEN_ZIP_TIMEOUT_SECONDS` | no | Total timeout for each `7z` command; default `3600`, `0` disables it |
 | `SEVEN_ZIP_IDLE_TIMEOUT_SECONDS` | no | Idle timeout while waiting for the next `7z` output chunk; default `60`, `0` disables it |
 | `ACCESS_SERVICE_TIMEOUT_SECONDS` | yes | Timeout for access-service download checks |
-| `BLURHASH_CACHE_SIZE` | no | Maximum number of in-memory BlurHash entries, default `4096`; `0` disables the local cache. Moka uses TinyLFU admission with LRU eviction, retaining frequently requested entries. Each process has its own cache. |
+| `BLURHASH_CACHE_SIZE` | no | Approximate upper bound on in-memory BlurHash entries, default `4096`; `0` disables the local cache. Moka uses TinyLFU admission with LRU eviction. |
+| `BLURHASH_CACHE_MAX_BYTES` | no | Estimated local cache memory budget, default `5242880` (5 MiB); `0` disables the cache. Conservative entry weights include an allowance for cache metadata. Moka maintains capacity asynchronously; this is not a hard RSS limit. |
 | `BLURHASH_CACHE_TTL_SECONDS` | no | Redis TTL for shared BlurHash cache entries when `REDIS_URL` is configured; default `604800`, `0` disables expiry |
 
 ### Service Ownership
