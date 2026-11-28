@@ -26,7 +26,7 @@ anymore.
 | `SEVEN_ZIP_TIMEOUT_SECONDS` | no | Total timeout for each `7z` command; default `3600`, `0` disables it |
 | `SEVEN_ZIP_IDLE_TIMEOUT_SECONDS` | no | Idle timeout while waiting for the next `7z` output chunk; default `60`, `0` disables it |
 | `ACCESS_SERVICE_TIMEOUT_SECONDS` | yes | Timeout for access-service download checks |
-| `BLURHASH_CACHE_SIZE` | no | In-memory LRU cache size for computed BlurHash entries; default `4096`. Each worker keeps its own cache, so higher values can materially increase RSS. |
+| `BLURHASH_CACHE_SIZE` | no | Maximum number of in-memory BlurHash entries, default `4096`; `0` disables the local cache. Moka uses TinyLFU admission with LRU eviction, retaining frequently requested entries. Each process has its own cache. |
 | `BLURHASH_CACHE_TTL_SECONDS` | no | Redis TTL for shared BlurHash cache entries when `REDIS_URL` is configured; default `604800`, `0` disables expiry |
 
 ### Service Ownership

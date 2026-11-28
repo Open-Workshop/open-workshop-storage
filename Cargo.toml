@@ -13,7 +13,7 @@ anyhow = "1"
 futures-util = "0.3"
 hmac = "0.13"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
-lru = "0.19"
+moka = { version = "0.12.16", features = ["future"] }
 bytes = "1"
 http-body-util = "0.1"
 http-body = "1"

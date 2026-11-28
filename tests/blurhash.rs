@@ -137,6 +137,17 @@ async fn blurhash_reports_computation_then_local_hit() {
 }
 
 #[tokio::test]
+async fn zero_capacity_disables_local_blurhash_cache() {
+    let dir = temp_dir("blurhash-cache-disabled");
+    let mut config = common::test_config(dir.path());
+    config.blurhash_cache_size = 0;
+    let state = common::test_state_with_config(config);
+    state.write_local_blurhash_cache("key", ("hash".to_owned(), 6, 4)).await;
+    assert!(state.read_local_blurhash_cache("key").await.is_none());
+    assert_eq!(state.local_blurhash_cache_entries(), 0);
+}
+
+#[tokio::test]
 async fn uncached_computation_waits_for_shared_capacity() {
     let dir = temp_dir("blurhash-compute-limit");
     let state = test_state(dir.path());

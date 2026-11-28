@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,7 +9,7 @@ use axum::http::{Request, Uri};
 use bytes::Bytes;
 use futures_util::FutureExt;
 use http_body_util::Full;
-use lru::LruCache;
+use moka::future::Cache;
 use opentelemetry::{global, Context, KeyValue};
 use opentelemetry::trace::{FutureExt as OtelFutureExt, SpanKind, Status, TraceContextExt, Tracer};
 use serde_json::{Map, Value};
@@ -39,7 +38,7 @@ pub struct AppState {
     pub temp_dir: PathBuf,
     pub job_state: Arc<Mutex<HashMap<String, JobState>>>,
     pub job_meta: Arc<Mutex<HashMap<String, Value>>>,
-    blurhash_cache: Option<Arc<Mutex<LruCache<String, (String, u32, u32)>>>>,
+    blurhash_cache: Option<Cache<String, (String, u32, u32)>>,
     pub blurhash_metadata_limit: Arc<Semaphore>,
     pub blurhash_compute_limit: Arc<Semaphore>,
     redis_backend: Option<Arc<RedisBackend>>,
@@ -63,9 +62,7 @@ impl AppState {
         let blurhash_cache = if config.blurhash_cache_size == 0 {
             None
         } else {
-            let capacity = NonZeroUsize::new(config.blurhash_cache_size)
-                .unwrap_or_else(|| NonZeroUsize::new(1).unwrap());
-            Some(Arc::new(Mutex::new(LruCache::new(capacity))))
+            Some(Cache::new(config.blurhash_cache_size as u64))
         };
 
         let redis_backend = match config.redis_url.as_deref() {
@@ -220,16 +217,19 @@ impl AppState {
         let Some(cache) = &self.blurhash_cache else {
             return None;
         };
-        let mut lock = cache.lock().await;
-        lock.get(cache_key).cloned()
+        cache.get(cache_key).await
     }
 
     pub async fn write_local_blurhash_cache(&self, cache_key: &str, data: (String, u32, u32)) {
         let Some(cache) = &self.blurhash_cache else {
             return;
         };
-        let mut lock = cache.lock().await;
-        lock.put(cache_key.to_string(), data);
+        cache.insert(cache_key.to_string(), data).await;
+    }
+
+    /// Moka maintains its entry count asynchronously, so this is an estimate.
+    pub fn local_blurhash_cache_entries(&self) -> u64 {
+        self.blurhash_cache.as_ref().map_or(0, Cache::entry_count)
     }
 
     pub async fn read_blurhash_cache(&self, cache_key: &str) -> Option<Value> {
